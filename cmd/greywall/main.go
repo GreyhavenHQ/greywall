@@ -4,10 +4,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"gitea.app.monadical.io/monadical/greywall/internal/config"
@@ -34,6 +37,8 @@ var (
 	exitCode      int
 	showVersion   bool
 	linuxFeatures bool
+	learning      bool
+	templateName  string
 )
 
 func main() {
@@ -68,6 +73,7 @@ Examples:
   greywall -c "echo hello && ls"                                # Run with shell expansion
   greywall --settings config.json npm install
   greywall -p 3000 -c "npm run dev"                             # Expose port 3000
+  greywall --learning -- opencode                                # Learn filesystem needs
 
 Configuration file format:
 {
@@ -98,10 +104,13 @@ Configuration file format:
 	rootCmd.Flags().StringArrayVarP(&exposePorts, "port", "p", nil, "Expose port for inbound connections (can be used multiple times)")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Show version information")
 	rootCmd.Flags().BoolVar(&linuxFeatures, "linux-features", false, "Show available Linux security features and exit")
+	rootCmd.Flags().BoolVar(&learning, "learning", false, "Run in learning mode: trace filesystem access and generate a config template")
+	rootCmd.Flags().StringVar(&templateName, "template", "", "Load a specific learned template by name (see: greywall templates list)")
 
 	rootCmd.Flags().SetInterspersed(true)
 
 	rootCmd.AddCommand(newCompletionCmd(rootCmd))
+	rootCmd.AddCommand(newTemplatesCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -175,6 +184,43 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Extract command name for learned template lookup
+	cmdName := extractCommandName(args, cmdString)
+
+	// Load learned template (when NOT in learning mode)
+	if !learning {
+		// Determine which template to load: --template flag takes priority
+		var templatePath string
+		var templateLabel string
+		if templateName != "" {
+			templatePath = sandbox.LearnedTemplatePath(templateName)
+			templateLabel = templateName
+		} else if cmdName != "" {
+			templatePath = sandbox.LearnedTemplatePath(cmdName)
+			templateLabel = cmdName
+		}
+
+		if templatePath != "" {
+			learnedCfg, loadErr := config.Load(templatePath)
+			if loadErr != nil {
+				if debug {
+					fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to load learned template: %v\n", loadErr)
+				}
+			} else if learnedCfg != nil {
+				cfg = config.Merge(cfg, learnedCfg)
+				if debug {
+					fmt.Fprintf(os.Stderr, "[greywall] Auto-loaded learned template for %q\n", templateLabel)
+				}
+			} else if templateName != "" {
+				// Explicit --template but file doesn't exist
+				return fmt.Errorf("learned template %q not found at %s\nRun: greywall templates list", templateName, templatePath)
+			} else if cmdName != "" {
+				// No template found for this command - suggest creating one
+				fmt.Fprintf(os.Stderr, "[greywall] No learned template for %q. Run with --learning to create one.\n", cmdName)
+			}
+		}
+	}
+
 	// CLI flags override config
 	if proxyURL != "" {
 		cfg.Network.ProxyURL = proxyURL
@@ -183,8 +229,33 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		cfg.Network.DnsAddr = dnsAddr
 	}
 
+	// Auto-inject command name as SOCKS5 proxy username when no credentials are set.
+	// This lets the proxy identify which sandboxed command originated the traffic.
+	if cfg.Network.ProxyURL != "" && cmdName != "" {
+		if u, err := url.Parse(cfg.Network.ProxyURL); err == nil && u.User == nil {
+			u.User = url.User(cmdName)
+			cfg.Network.ProxyURL = u.String()
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy username to %q\n", cmdName)
+			}
+		}
+	}
+
+	// Learning mode setup
+	if learning {
+		if err := sandbox.CheckStraceAvailable(); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "[greywall] Learning mode: tracing filesystem access for %q\n", cmdName)
+		fmt.Fprintf(os.Stderr, "[greywall] WARNING: The sandbox filesystem is relaxed during learning. Do not use for untrusted code.\n")
+	}
+
 	manager := sandbox.NewManager(cfg, debug, monitor)
 	manager.SetExposedPorts(ports)
+	if learning {
+		manager.SetLearning(true)
+		manager.SetCommandName(cmdName)
+	}
 	defer manager.Cleanup()
 
 	if err := manager.Initialize(); err != nil {
@@ -267,12 +338,48 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// Set exit code but don't os.Exit() here - let deferred cleanup run
 			exitCode = exitErr.ExitCode()
-			return nil
+			// Continue to template generation even if command exited non-zero
+		} else {
+			return fmt.Errorf("command failed: %w", err)
 		}
-		return fmt.Errorf("command failed: %w", err)
+	}
+
+	// Generate learned template after command completes
+	if learning && manager.IsLearning() {
+		fmt.Fprintf(os.Stderr, "[greywall] Analyzing filesystem access patterns...\n")
+		templatePath, genErr := manager.GenerateLearnedTemplate(cmdName)
+		if genErr != nil {
+			fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to generate template: %v\n", genErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "[greywall] Template saved to: %s\n", templatePath)
+			fmt.Fprintf(os.Stderr, "[greywall] Next run will auto-load this template.\n")
+		}
 	}
 
 	return nil
+}
+
+// extractCommandName extracts a human-readable command name from the arguments.
+// For args like ["opencode"], returns "opencode".
+// For -c "opencode --foo", returns "opencode".
+// Strips path prefixes (e.g., /usr/bin/opencode -> opencode).
+func extractCommandName(args []string, cmdStr string) string {
+	var name string
+	switch {
+	case len(args) > 0:
+		name = args[0]
+	case cmdStr != "":
+		// Take first token from the command string
+		parts := strings.Fields(cmdStr)
+		if len(parts) > 0 {
+			name = parts[0]
+		}
+	}
+	if name == "" {
+		return ""
+	}
+	// Strip path prefix
+	return filepath.Base(name)
 }
 
 // newCompletionCmd creates the completion subcommand for shell completions.
@@ -317,6 +424,71 @@ ${fpath[1]}/_greywall for zsh, ~/.config/fish/completions/greywall.fish for fish
 			}
 		},
 	}
+	return cmd
+}
+
+// newTemplatesCmd creates the templates subcommand for managing learned templates.
+func newTemplatesCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "templates",
+		Short: "Manage learned sandbox templates",
+		Long: `List and inspect learned sandbox templates.
+
+Templates are created by running greywall with --learning and are stored in:
+  ` + sandbox.LearnedTemplateDir() + `
+
+Examples:
+  greywall templates list            # List all learned templates
+  greywall templates show opencode   # Show the content of a template`,
+	}
+
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all learned templates",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			templates, err := sandbox.ListLearnedTemplates()
+			if err != nil {
+				return fmt.Errorf("failed to list templates: %w", err)
+			}
+			if len(templates) == 0 {
+				fmt.Println("No learned templates found.")
+				fmt.Printf("Create one with: greywall --learning -- <command>\n")
+				return nil
+			}
+			fmt.Printf("Learned templates (%s):\n\n", sandbox.LearnedTemplateDir())
+			for _, t := range templates {
+				fmt.Printf("  %s\n", t.Name)
+			}
+			fmt.Println()
+			fmt.Println("Show a template: greywall templates show <name>")
+			fmt.Println("Use a template:  greywall --template <name> -- <command>")
+			return nil
+		},
+	}
+
+	showCmd := &cobra.Command{
+		Use:   "show <name>",
+		Short: "Show the content of a learned template",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			templatePath := sandbox.LearnedTemplatePath(name)
+			data, err := os.ReadFile(templatePath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return fmt.Errorf("template %q not found\nRun: greywall templates list", name)
+				}
+				return fmt.Errorf("failed to read template: %w", err)
+			}
+			fmt.Printf("Template: %s\n", name)
+			fmt.Printf("Path:     %s\n\n", templatePath)
+			fmt.Print(string(data))
+			return nil
+		},
+	}
+
+	cmd.AddCommand(listCmd, showCmd)
 	return cmd
 }
 

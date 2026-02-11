@@ -102,4 +102,3 @@ func DecodeSandboxedCommand(encoded string) (string, error) {
 	}
 	return string(data), nil
 }
-

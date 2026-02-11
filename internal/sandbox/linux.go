@@ -20,12 +20,12 @@ import (
 
 // ProxyBridge bridges sandbox to an external SOCKS5 proxy via Unix socket.
 type ProxyBridge struct {
-	SocketPath string    // Unix socket path
-	ProxyHost  string    // Parsed from ProxyURL
-	ProxyPort  string    // Parsed from ProxyURL
-	ProxyUser  string    // Username from ProxyURL (if any)
-	ProxyPass  string    // Password from ProxyURL (if any)
-	HasAuth    bool      // Whether credentials were provided
+	SocketPath string // Unix socket path
+	ProxyHost  string // Parsed from ProxyURL
+	ProxyPort  string // Parsed from ProxyURL
+	ProxyUser  string // Username from ProxyURL (if any)
+	ProxyPass  string // Password from ProxyURL (if any)
+	HasAuth    bool   // Whether credentials were provided
 	process    *exec.Cmd
 	debug      bool
 }
@@ -122,6 +122,10 @@ type LinuxSandboxOptions struct {
 	Monitor bool
 	// Debug mode
 	Debug bool
+	// Learning mode: permissive sandbox with strace tracing
+	Learning bool
+	// Path to host-side strace log file (bind-mounted into sandbox)
+	StraceLogPath string
 }
 
 // NewProxyBridge creates a Unix socket bridge to an external SOCKS5 proxy.
@@ -451,9 +455,30 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		}
 	}
 
+	// Learning mode: permissive sandbox with home + cwd writable
+	if opts.Learning {
+		if opts.Debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Learning mode: binding root read-only, home + cwd writable\n")
+		}
+		// Bind entire root read-only as baseline
+		bwrapArgs = append(bwrapArgs, "--ro-bind", "/", "/")
+
+		// Make home and cwd writable (overrides read-only)
+		home, _ := os.UserHomeDir()
+		if home != "" && fileExists(home) {
+			bwrapArgs = append(bwrapArgs, "--bind", home, home)
+		}
+		if cwd != "" && fileExists(cwd) && cwd != home {
+			bwrapArgs = append(bwrapArgs, "--bind", cwd, cwd)
+		}
+
+	}
+
 	defaultDenyRead := cfg != nil && cfg.Filesystem.DefaultDenyRead
 
-	if defaultDenyRead {
+	if opts.Learning {
+		// Skip defaultDenyRead logic in learning mode (already set up above)
+	} else if defaultDenyRead {
 		// In defaultDenyRead mode, we only bind essential system paths read-only
 		// and user-specified allowRead paths. Everything else is inaccessible.
 		if opts.Debug {
@@ -506,6 +531,11 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 
 	// /tmp needs to be writable for many programs
 	bwrapArgs = append(bwrapArgs, "--tmpfs", "/tmp")
+
+	// Bind strace log file into sandbox AFTER --tmpfs /tmp so it's visible
+	if opts.Learning && opts.StraceLogPath != "" {
+		bwrapArgs = append(bwrapArgs, "--bind", opts.StraceLogPath, opts.StraceLogPath)
+	}
 
 	// Ensure /etc/resolv.conf is readable inside the sandbox.
 	// On some systems (e.g., WSL), /etc/resolv.conf is a symlink to a path
@@ -560,112 +590,118 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		}
 	}
 
-	writablePaths := make(map[string]bool)
+	// In learning mode, skip writable paths, deny rules, and mandatory deny
+	// (the sandbox is already permissive with home + cwd writable)
+	if !opts.Learning {
 
-	// Add default write paths (system paths needed for operation)
-	for _, p := range GetDefaultWritePaths() {
-		// Skip /dev paths (handled by --dev) and /tmp paths (handled by --tmpfs)
-		if strings.HasPrefix(p, "/dev/") || strings.HasPrefix(p, "/tmp/") || strings.HasPrefix(p, "/private/tmp/") {
-			continue
-		}
-		writablePaths[p] = true
-	}
+		writablePaths := make(map[string]bool)
 
-	// Add user-specified allowWrite paths
-	if cfg != nil && cfg.Filesystem.AllowWrite != nil {
-		expandedPaths := ExpandGlobPatterns(cfg.Filesystem.AllowWrite)
-		for _, p := range expandedPaths {
+		// Add default write paths (system paths needed for operation)
+		for _, p := range GetDefaultWritePaths() {
+			// Skip /dev paths (handled by --dev) and /tmp paths (handled by --tmpfs)
+			if strings.HasPrefix(p, "/dev/") || strings.HasPrefix(p, "/tmp/") || strings.HasPrefix(p, "/private/tmp/") {
+				continue
+			}
 			writablePaths[p] = true
 		}
 
-		// Add non-glob paths
-		for _, p := range cfg.Filesystem.AllowWrite {
-			normalized := NormalizePath(p)
-			if !ContainsGlobChars(normalized) {
-				writablePaths[normalized] = true
+		// Add user-specified allowWrite paths
+		if cfg != nil && cfg.Filesystem.AllowWrite != nil {
+			expandedPaths := ExpandGlobPatterns(cfg.Filesystem.AllowWrite)
+			for _, p := range expandedPaths {
+				writablePaths[p] = true
 			}
-		}
-	}
 
-	// Make writable paths actually writable (override read-only root)
-	for p := range writablePaths {
-		if fileExists(p) {
-			bwrapArgs = append(bwrapArgs, "--bind", p, p)
-		}
-	}
-
-	// Handle denyRead paths - hide them
-	// For directories: use --tmpfs to replace with empty tmpfs
-	// For files: use --ro-bind /dev/null to mask with empty file
-	// Skip symlinks: they may point outside the sandbox and cause mount errors
-	if cfg != nil && cfg.Filesystem.DenyRead != nil {
-		expandedDenyRead := ExpandGlobPatterns(cfg.Filesystem.DenyRead)
-		for _, p := range expandedDenyRead {
-			if canMountOver(p) {
-				if isDirectory(p) {
-					bwrapArgs = append(bwrapArgs, "--tmpfs", p)
-				} else {
-					// Mask file with /dev/null (appears as empty, unreadable)
-					bwrapArgs = append(bwrapArgs, "--ro-bind", "/dev/null", p)
+			// Add non-glob paths
+			for _, p := range cfg.Filesystem.AllowWrite {
+				normalized := NormalizePath(p)
+				if !ContainsGlobChars(normalized) {
+					writablePaths[normalized] = true
 				}
 			}
 		}
 
-		// Add non-glob paths
-		for _, p := range cfg.Filesystem.DenyRead {
-			normalized := NormalizePath(p)
-			if !ContainsGlobChars(normalized) && canMountOver(normalized) {
-				if isDirectory(normalized) {
-					bwrapArgs = append(bwrapArgs, "--tmpfs", normalized)
-				} else {
-					bwrapArgs = append(bwrapArgs, "--ro-bind", "/dev/null", normalized)
+		// Make writable paths actually writable (override read-only root)
+		for p := range writablePaths {
+			if fileExists(p) {
+				bwrapArgs = append(bwrapArgs, "--bind", p, p)
+			}
+		}
+
+		// Handle denyRead paths - hide them
+		// For directories: use --tmpfs to replace with empty tmpfs
+		// For files: use --ro-bind /dev/null to mask with empty file
+		// Skip symlinks: they may point outside the sandbox and cause mount errors
+		if cfg != nil && cfg.Filesystem.DenyRead != nil {
+			expandedDenyRead := ExpandGlobPatterns(cfg.Filesystem.DenyRead)
+			for _, p := range expandedDenyRead {
+				if canMountOver(p) {
+					if isDirectory(p) {
+						bwrapArgs = append(bwrapArgs, "--tmpfs", p)
+					} else {
+						// Mask file with /dev/null (appears as empty, unreadable)
+						bwrapArgs = append(bwrapArgs, "--ro-bind", "/dev/null", p)
+					}
+				}
+			}
+
+			// Add non-glob paths
+			for _, p := range cfg.Filesystem.DenyRead {
+				normalized := NormalizePath(p)
+				if !ContainsGlobChars(normalized) && canMountOver(normalized) {
+					if isDirectory(normalized) {
+						bwrapArgs = append(bwrapArgs, "--tmpfs", normalized)
+					} else {
+						bwrapArgs = append(bwrapArgs, "--ro-bind", "/dev/null", normalized)
+					}
 				}
 			}
 		}
-	}
 
-	// Apply mandatory deny patterns (make dangerous files/dirs read-only)
-	// This overrides any writable mounts for these paths
-	//
-	// Note: We only use concrete paths from getMandatoryDenyPaths(), NOT glob expansion.
-	// GetMandatoryDenyPatterns() returns expensive **/pattern globs that require walking
-	// the entire directory tree - this can hang on large directories (see issue #27).
-	//
-	// The concrete paths cover dangerous files in cwd and home directory. Files like
-	// .bashrc in subdirectories are not protected, but this may be lower-risk since shell
-	// rc files in project subdirectories are uncommon and not automatically sourced.
-	//
-	// TODO: consider depth-limited glob expansion (e.g., max 3 levels) to protect
-	// subdirectory dangerous files without full tree walks that hang on large dirs.
-	mandatoryDeny := getMandatoryDenyPaths(cwd)
+		// Apply mandatory deny patterns (make dangerous files/dirs read-only)
+		// This overrides any writable mounts for these paths
+		//
+		// Note: We only use concrete paths from getMandatoryDenyPaths(), NOT glob expansion.
+		// GetMandatoryDenyPatterns() returns expensive **/pattern globs that require walking
+		// the entire directory tree - this can hang on large directories (see issue #27).
+		//
+		// The concrete paths cover dangerous files in cwd and home directory. Files like
+		// .bashrc in subdirectories are not protected, but this may be lower-risk since shell
+		// rc files in project subdirectories are uncommon and not automatically sourced.
+		//
+		// TODO: consider depth-limited glob expansion (e.g., max 3 levels) to protect
+		// subdirectory dangerous files without full tree walks that hang on large dirs.
+		mandatoryDeny := getMandatoryDenyPaths(cwd)
 
-	// Deduplicate
-	seen := make(map[string]bool)
-	for _, p := range mandatoryDeny {
-		if !seen[p] && fileExists(p) {
-			seen[p] = true
-			bwrapArgs = append(bwrapArgs, "--ro-bind", p, p)
-		}
-	}
-
-	// Handle explicit denyWrite paths (make them read-only)
-	if cfg != nil && cfg.Filesystem.DenyWrite != nil {
-		expandedDenyWrite := ExpandGlobPatterns(cfg.Filesystem.DenyWrite)
-		for _, p := range expandedDenyWrite {
-			if fileExists(p) && !seen[p] {
+		// Deduplicate
+		seen := make(map[string]bool)
+		for _, p := range mandatoryDeny {
+			if !seen[p] && fileExists(p) {
 				seen[p] = true
 				bwrapArgs = append(bwrapArgs, "--ro-bind", p, p)
 			}
 		}
-		// Add non-glob paths
-		for _, p := range cfg.Filesystem.DenyWrite {
-			normalized := NormalizePath(p)
-			if !ContainsGlobChars(normalized) && fileExists(normalized) && !seen[normalized] {
-				seen[normalized] = true
-				bwrapArgs = append(bwrapArgs, "--ro-bind", normalized, normalized)
+
+		// Handle explicit denyWrite paths (make them read-only)
+		if cfg != nil && cfg.Filesystem.DenyWrite != nil {
+			expandedDenyWrite := ExpandGlobPatterns(cfg.Filesystem.DenyWrite)
+			for _, p := range expandedDenyWrite {
+				if fileExists(p) && !seen[p] {
+					seen[p] = true
+					bwrapArgs = append(bwrapArgs, "--ro-bind", p, p)
+				}
+			}
+			// Add non-glob paths
+			for _, p := range cfg.Filesystem.DenyWrite {
+				normalized := NormalizePath(p)
+				if !ContainsGlobChars(normalized) && fileExists(normalized) && !seen[normalized] {
+					seen[normalized] = true
+					bwrapArgs = append(bwrapArgs, "--ro-bind", normalized, normalized)
+				}
 			}
 		}
-	}
+
+	} // end if !opts.Learning
 
 	// Bind the proxy bridge Unix socket into the sandbox (needs to be writable)
 	var dnsRelayResolvConf string // temp file path for custom resolv.conf
@@ -693,13 +729,21 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 			)
 		}
 
-		// Override /etc/resolv.conf to point DNS at our local relay (port 53).
-		// Inside the sandbox, a socat relay on UDP :53 converts queries to the
-		// DNS bridge (Unix socket -> host DNS server) or to TCP through the tunnel.
+		// Override /etc/resolv.conf for DNS resolution inside the sandbox.
 		if dnsBridge != nil || (tun2socksPath != "" && features.CanUseTransparentProxy()) {
 			tmpResolv, err := os.CreateTemp("", "greywall-resolv-*.conf")
 			if err == nil {
-				_, _ = tmpResolv.WriteString("nameserver 127.0.0.1\n")
+				if dnsBridge != nil {
+					// DNS bridge: point at local socat relay (UDP :53 -> Unix socket -> host DNS server)
+					_, _ = tmpResolv.WriteString("nameserver 127.0.0.1\n")
+				} else {
+					// tun2socks: point at public DNS with TCP mode.
+					// tun2socks intercepts TCP traffic and forwards through the SOCKS5 proxy,
+					// but doesn't reliably handle UDP DNS. "options use-vc" forces the resolver
+					// to use TCP (RFC 1035 §4.2.2), which tun2socks handles natively.
+					// Supported by glibc, Go 1.21+, c-ares, and most DNS resolver libraries.
+					_, _ = tmpResolv.WriteString("nameserver 1.1.1.1\nnameserver 8.8.8.8\noptions use-vc\n")
+				}
 				tmpResolv.Close()
 				dnsRelayResolvConf = tmpResolv.Name()
 				bwrapArgs = append(bwrapArgs, "--ro-bind", dnsRelayResolvConf, "/etc/resolv.conf")
@@ -707,7 +751,7 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 					if dnsBridge != nil {
 						fmt.Fprintf(os.Stderr, "[greywall:linux] DNS: overriding resolv.conf -> 127.0.0.1 (bridge to %s)\n", dnsBridge.DnsAddr)
 					} else {
-						fmt.Fprintf(os.Stderr, "[greywall:linux] DNS: overriding resolv.conf -> 127.0.0.1 (TCP relay through tunnel)\n")
+						fmt.Fprintf(os.Stderr, "[greywall:linux] DNS: overriding resolv.conf -> 1.1.1.1 (TCP via tun2socks tunnel)\n")
 					}
 				}
 			}
@@ -778,7 +822,9 @@ TUN2SOCKS_PID=$!
 
 `, proxyBridge.SocketPath, tun2socksProxyURL))
 
-		// DNS relay: convert UDP DNS queries on port 53 so apps can resolve names.
+		// DNS relay: only needed when using a dedicated DNS bridge.
+		// When using tun2socks without a DNS bridge, resolv.conf is configured with
+		// "options use-vc" to force TCP DNS, which tun2socks handles natively.
 		if dnsBridge != nil {
 			// Dedicated DNS bridge: UDP :53 -> Unix socket -> host DNS server
 			innerScript.WriteString(fmt.Sprintf(`# DNS relay: UDP queries -> Unix socket -> host DNS server (%s)
@@ -786,13 +832,6 @@ socat UDP4-RECVFROM:53,fork,reuseaddr UNIX-CONNECT:%s >/dev/null 2>&1 &
 DNS_RELAY_PID=$!
 
 `, dnsBridge.DnsAddr, dnsBridge.SocketPath))
-		} else {
-			// Fallback: UDP :53 -> TCP to public DNS through the tunnel
-			innerScript.WriteString(`# DNS relay: UDP queries -> TCP 1.1.1.1:53 (through tun2socks tunnel)
-socat UDP4-RECVFROM:53,fork,reuseaddr TCP:1.1.1.1:53 >/dev/null 2>&1 &
-DNS_RELAY_PID=$!
-
-`)
 		}
 	} else if proxyBridge != nil {
 		// Fallback: no TUN support, use env-var-based proxying
@@ -846,8 +885,49 @@ sleep 0.3
 # Run the user command
 `)
 
-	// Use Landlock wrapper if available
-	if useLandlockWrapper {
+	// In learning mode, wrap the command with strace to trace syscalls.
+	// strace -f follows forked children, which means it hangs if the app spawns
+	// long-lived child processes (LSP servers, file watchers, etc.).
+	// To handle this, we run strace in the background and spawn a monitor that
+	// detects when the main command (strace's direct child) exits by polling
+	// /proc/STRACE_PID/task/STRACE_PID/children, then kills strace.
+	if opts.Learning && opts.StraceLogPath != "" {
+		innerScript.WriteString(fmt.Sprintf(`# Learning mode: trace filesystem access
+strace -f -qq -I2 -e trace=openat,open,creat,mkdir,mkdirat,unlinkat,renameat,renameat2,symlinkat,linkat -o %s -- %s &
+GREYWALL_STRACE_PID=$!
+
+# Monitor: detect when the main command exits, then kill strace.
+# strace's direct child is the command. When it exits, the children file
+# becomes empty (grandchildren are reparented to init in the PID namespace).
+(
+    sleep 1
+    while kill -0 $GREYWALL_STRACE_PID 2>/dev/null; do
+        CHILDREN=$(cat /proc/$GREYWALL_STRACE_PID/task/$GREYWALL_STRACE_PID/children 2>/dev/null)
+        if [ -z "$CHILDREN" ]; then
+            sleep 0.5
+            kill $GREYWALL_STRACE_PID 2>/dev/null
+            break
+        fi
+        sleep 1
+    done
+) &
+GREYWALL_MONITOR_PID=$!
+
+trap 'kill -INT $GREYWALL_STRACE_PID 2>/dev/null' INT
+trap 'kill -TERM $GREYWALL_STRACE_PID 2>/dev/null' TERM
+wait $GREYWALL_STRACE_PID 2>/dev/null
+kill $GREYWALL_MONITOR_PID 2>/dev/null
+wait $GREYWALL_MONITOR_PID 2>/dev/null
+# Kill any orphaned child processes (LSP servers, file watchers, etc.)
+# that were spawned by the traced command and reparented to PID 1.
+# Without this, greywall hangs until they exit (they hold pipe FDs open).
+kill -TERM -1 2>/dev/null
+sleep 0.1
+`,
+			ShellQuoteSingle(opts.StraceLogPath), command,
+		))
+	} else if useLandlockWrapper {
+		// Use Landlock wrapper if available
 		// Pass config via environment variable (serialized as JSON)
 		// This ensures allowWrite/denyWrite rules are properly applied
 		if cfg != nil {
@@ -896,6 +976,9 @@ sleep 0.3
 		}
 		if reverseBridge != nil && len(reverseBridge.Ports) > 0 {
 			featureList = append(featureList, fmt.Sprintf("inbound:%v", reverseBridge.Ports))
+		}
+		if opts.Learning {
+			featureList = append(featureList, "learning(strace)")
 		}
 		fmt.Fprintf(os.Stderr, "[greywall:linux] Sandbox: %s\n", strings.Join(featureList, ", "))
 	}

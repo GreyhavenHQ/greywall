@@ -26,8 +26,8 @@ type Config struct {
 
 // NetworkConfig defines network restrictions.
 type NetworkConfig struct {
-	ProxyURL            string   `json:"proxyUrl,omitempty"`            // External SOCKS5 proxy (e.g. socks5://host:1080)
-	DnsAddr             string   `json:"dnsAddr,omitempty"`             // DNS server address on host (e.g. localhost:3153)
+	ProxyURL            string   `json:"proxyUrl,omitempty"` // External SOCKS5 proxy (e.g. socks5://host:1080)
+	DnsAddr             string   `json:"dnsAddr,omitempty"`  // DNS server address on host (e.g. localhost:3153)
 	AllowUnixSockets    []string `json:"allowUnixSockets,omitempty"`
 	AllowAllUnixSockets bool     `json:"allowAllUnixSockets,omitempty"`
 	AllowLocalBinding   bool     `json:"allowLocalBinding,omitempty"`

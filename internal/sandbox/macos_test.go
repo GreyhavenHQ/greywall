@@ -11,11 +11,11 @@ import (
 // the macOS sandbox profile allows outbound to the proxy host:port.
 func TestMacOS_NetworkRestrictionWithProxy(t *testing.T) {
 	tests := []struct {
-		name       string
-		proxyURL   string
-		wantProxy  bool
-		proxyHost  string
-		proxyPort  string
+		name      string
+		proxyURL  string
+		wantProxy bool
+		proxyHost string
+		proxyPort string
 	}{
 		{
 			name:      "no proxy - network blocked",

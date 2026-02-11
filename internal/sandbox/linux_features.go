@@ -36,9 +36,9 @@ type LinuxFeatures struct {
 	CanUnshareNet bool
 
 	// Transparent proxy support
-	HasIpCommand  bool // ip (iproute2) available
-	HasDevNetTun  bool // /dev/net/tun exists
-	HasTun2Socks  bool // tun2socks embedded binary available
+	HasIpCommand bool // ip (iproute2) available
+	HasDevNetTun bool // /dev/net/tun exists
+	HasTun2Socks bool // tun2socks embedded binary available
 
 	// Kernel version
 	KernelMajor int

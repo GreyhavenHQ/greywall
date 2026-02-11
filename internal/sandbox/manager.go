@@ -19,6 +19,9 @@ type Manager struct {
 	debug         bool
 	monitor       bool
 	initialized   bool
+	learning      bool   // learning mode: permissive sandbox with strace
+	straceLogPath string // host-side temp file for strace output
+	commandName   string // name of the command being learned
 }
 
 // NewManager creates a new sandbox manager.
@@ -33,6 +36,21 @@ func NewManager(cfg *config.Config, debug, monitor bool) *Manager {
 // SetExposedPorts sets the ports to expose for inbound connections.
 func (m *Manager) SetExposedPorts(ports []int) {
 	m.exposedPorts = ports
+}
+
+// SetLearning enables or disables learning mode.
+func (m *Manager) SetLearning(enabled bool) {
+	m.learning = enabled
+}
+
+// SetCommandName sets the command name for learning mode template generation.
+func (m *Manager) SetCommandName(name string) {
+	m.commandName = name
+}
+
+// IsLearning returns whether learning mode is enabled.
+func (m *Manager) IsLearning() bool {
+	return m.learning
 }
 
 // Initialize sets up the sandbox infrastructure.
@@ -128,10 +146,53 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 	case platform.MacOS:
 		return WrapCommandMacOS(m.config, command, m.exposedPorts, m.debug)
 	case platform.Linux:
+		if m.learning {
+			return m.wrapCommandLearning(command)
+		}
 		return WrapCommandLinux(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.tun2socksPath, m.debug)
 	default:
 		return "", fmt.Errorf("unsupported platform: %s", plat)
 	}
+}
+
+// wrapCommandLearning creates a permissive sandbox with strace for learning mode.
+func (m *Manager) wrapCommandLearning(command string) (string, error) {
+	// Create host-side temp file for strace output
+	tmpFile, err := os.CreateTemp("", "greywall-strace-*.log")
+	if err != nil {
+		return "", fmt.Errorf("failed to create strace log file: %w", err)
+	}
+	tmpFile.Close()
+	m.straceLogPath = tmpFile.Name()
+
+	m.logDebug("Strace log file: %s", m.straceLogPath)
+
+	return WrapCommandLinuxWithOptions(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.tun2socksPath, LinuxSandboxOptions{
+		UseLandlock:   false, // Disabled: seccomp blocks ptrace which strace needs
+		UseSeccomp:    false, // Disabled: conflicts with strace
+		UseEBPF:       false,
+		Debug:         m.debug,
+		Learning:      true,
+		StraceLogPath: m.straceLogPath,
+	})
+}
+
+// GenerateLearnedTemplate generates a config template from the strace log collected during learning.
+func (m *Manager) GenerateLearnedTemplate(cmdName string) (string, error) {
+	if m.straceLogPath == "" {
+		return "", fmt.Errorf("no strace log available (was learning mode enabled?)")
+	}
+
+	templatePath, err := GenerateLearnedTemplate(m.straceLogPath, cmdName, m.debug)
+	if err != nil {
+		return "", err
+	}
+
+	// Clean up strace log since we've processed it
+	os.Remove(m.straceLogPath)
+	m.straceLogPath = ""
+
+	return templatePath, nil
 }
 
 // Cleanup stops the proxies and cleans up resources.
@@ -147,6 +208,10 @@ func (m *Manager) Cleanup() {
 	}
 	if m.tun2socksPath != "" {
 		os.Remove(m.tun2socksPath)
+	}
+	if m.straceLogPath != "" {
+		os.Remove(m.straceLogPath)
+		m.straceLogPath = ""
 	}
 	m.logDebug("Sandbox manager cleaned up")
 }

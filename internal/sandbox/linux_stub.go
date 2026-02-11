@@ -29,11 +29,13 @@ type ReverseBridge struct {
 
 // LinuxSandboxOptions is a stub for non-Linux platforms.
 type LinuxSandboxOptions struct {
-	UseLandlock bool
-	UseSeccomp  bool
-	UseEBPF     bool
-	Monitor     bool
-	Debug       bool
+	UseLandlock   bool
+	UseSeccomp    bool
+	UseEBPF       bool
+	Monitor       bool
+	Debug         bool
+	Learning      bool
+	StraceLogPath string
 }
 
 // NewProxyBridge returns an error on non-Linux platforms.
