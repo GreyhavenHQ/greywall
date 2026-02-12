@@ -120,7 +120,11 @@ func (m *Manager) Initialize() error {
 
 	m.initialized = true
 	if m.config.Network.ProxyURL != "" {
-		m.logDebug("Sandbox manager initialized (proxy: %s)", m.config.Network.ProxyURL)
+		dnsInfo := "none"
+		if m.config.Network.DnsAddr != "" {
+			dnsInfo = m.config.Network.DnsAddr
+		}
+		m.logDebug("Sandbox manager initialized (proxy: %s, dns: %s)", m.config.Network.ProxyURL, dnsInfo)
 	} else {
 		m.logDebug("Sandbox manager initialized (no proxy, network blocked)")
 	}

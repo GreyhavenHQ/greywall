@@ -55,9 +55,9 @@ func main() {
 		Long: `greywall is a command-line tool that runs commands in a sandboxed environment
 with network and filesystem restrictions.
 
-By default, all network access is blocked. Use --proxy to route traffic through
-an external SOCKS5 proxy, or configure a proxy URL in your settings file at
-~/.config/greywall/greywall.json (or ~/Library/Application Support/greywall/greywall.json on macOS).
+By default, traffic is routed through the GreyHaven SOCKS5 proxy at localhost:42051
+with DNS via localhost:42053. Use --proxy and --dns to override, or configure in
+your settings file at ~/.config/greywall/greywall.json (or ~/Library/Application Support/greywall/greywall.json on macOS).
 
 On Linux, greywall uses tun2socks for truly transparent proxying: all TCP/UDP traffic
 from any binary is captured at the kernel level via a TUN device and forwarded
@@ -98,8 +98,8 @@ Configuration file format:
 	rootCmd.Flags().BoolVarP(&debug, "debug", "d", false, "Enable debug logging")
 	rootCmd.Flags().BoolVarP(&monitor, "monitor", "m", false, "Monitor and log sandbox violations")
 	rootCmd.Flags().StringVarP(&settingsPath, "settings", "s", "", "Path to settings file (default: OS config directory)")
-	rootCmd.Flags().StringVar(&proxyURL, "proxy", "", "External SOCKS5 proxy URL (e.g., socks5://localhost:1080)")
-	rootCmd.Flags().StringVar(&dnsAddr, "dns", "", "DNS server address on host (default: localhost:5353 when proxy is set)")
+	rootCmd.Flags().StringVar(&proxyURL, "proxy", "", "External SOCKS5 proxy URL (default: socks5://localhost:42052)")
+	rootCmd.Flags().StringVar(&dnsAddr, "dns", "", "DNS server address on host (default: localhost:42053)")
 	rootCmd.Flags().StringVarP(&cmdString, "c", "c", "", "Run command string directly (like sh -c)")
 	rootCmd.Flags().StringArrayVarP(&exposePorts, "port", "p", nil, "Expose port for inbound connections (can be used multiple times)")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Show version information")
@@ -229,14 +229,18 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		cfg.Network.DnsAddr = dnsAddr
 	}
 
-	// Default DNS to localhost:5353 when proxy is configured but no DNS address
-	// is specified. GreyHaven typically runs a DNS server on this port, and using
-	// a dedicated DNS bridge ensures DNS queries go through controlled infrastructure
-	// rather than leaking to public resolvers.
-	if cfg.Network.ProxyURL != "" && cfg.Network.DnsAddr == "" {
-		cfg.Network.DnsAddr = "localhost:5353"
+	// GreyHaven defaults: when no proxy or DNS is configured (neither via CLI
+	// nor config file), use the standard GreyHaven infrastructure ports.
+	if cfg.Network.ProxyURL == "" {
+		cfg.Network.ProxyURL = "socks5://localhost:42052"
 		if debug {
-			fmt.Fprintf(os.Stderr, "[greywall] Defaulting DNS to localhost:5353 (proxy configured, no --dns specified)\n")
+			fmt.Fprintf(os.Stderr, "[greywall] Defaulting proxy to socks5://localhost:42052\n")
+		}
+	}
+	if cfg.Network.DnsAddr == "" {
+		cfg.Network.DnsAddr = "localhost:42053"
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall] Defaulting DNS to localhost:42053\n")
 		}
 	}
 
