@@ -67,3 +67,29 @@ Lessons learned and issues encountered during development.
 **Problem:** gost's SOCKS5 server always selects authentication method 0x02 (username/password), even when no real credentials are needed. Clients that only offer method 0x00 (no auth) get rejected.
 
 **Fix:** Always include credentials in the proxy URL (e.g., `proxy:proxy@`). In tun2socks proxy URL construction, include `userinfo` so tun2socks offers both auth methods during SOCKS5 negotiation.
+
+---
+
+## Network namespaces fail on Ubuntu 24.04 (`RTM_NEWADDR: Operation not permitted`)
+
+**Problem:** On Ubuntu 24.04 (tested in a KVM guest with bridged virtio/virbr0), `--version` reports `bwrap(no-netns)` and transparent proxy is unavailable. `kernel.unprivileged_userns_clone=1` is set, bwrap and socat are installed, but `bwrap --unshare-net` fails with:
+```
+bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+```
+
+**Cause:** Ubuntu 24.04 introduced `kernel.apparmor_restrict_unprivileged_userns` (default: 1). This strips capabilities like `CAP_NET_ADMIN` from processes inside unprivileged user namespaces, even without a bwrap-specific AppArmor profile. Bubblewrap creates the network namespace successfully but cannot configure the loopback interface (adding 127.0.0.1 via netlink RTM_NEWADDR requires `CAP_NET_ADMIN`). Not a hypervisor issue — happens on bare metal Ubuntu 24.04 too.
+
+**Diagnosis:**
+```bash
+sysctl kernel.apparmor_restrict_unprivileged_userns  # likely returns 1
+bwrap --unshare-net --ro-bind / / -- /bin/true        # reproduces the error
+```
+
+**Fix:** Disable the restriction (requires root on the guest):
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+# Persist across reboots:
+echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-greywall-userns.conf
+```
+
+**Alternative:** Accept the limitation — greywall still works for filesystem sandboxing, seccomp, and Landlock. Network access is blocked outright rather than redirected through a proxy.

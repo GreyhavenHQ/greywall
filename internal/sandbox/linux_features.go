@@ -276,6 +276,107 @@ func (f *LinuxFeatures) MinimumViable() bool {
 	return f.HasBwrap && f.HasSocat
 }
 
+// PrintDependencyStatus prints dependency status with install suggestions for Linux.
+func PrintDependencyStatus() {
+	features := DetectLinuxFeatures()
+
+	fmt.Printf("\n  Platform: linux (kernel %d.%d)\n", features.KernelMajor, features.KernelMinor)
+
+	fmt.Printf("\n  Dependencies (required):\n")
+
+	allGood := true
+	if features.HasBwrap {
+		fmt.Printf("    ✓ bubblewrap (bwrap)\n")
+	} else {
+		fmt.Printf("    ✗ bubblewrap (bwrap) — REQUIRED\n")
+		allGood = false
+	}
+	if features.HasSocat {
+		fmt.Printf("    ✓ socat\n")
+	} else {
+		fmt.Printf("    ✗ socat — REQUIRED\n")
+		allGood = false
+	}
+
+	if !allGood {
+		fmt.Printf("\n  Install missing dependencies:\n")
+		fmt.Printf("    %s\n", suggestInstallCmd(features))
+	}
+
+	fmt.Printf("\n  Security features: %s\n", features.Summary())
+
+	if features.CanUseTransparentProxy() {
+		fmt.Printf("  Transparent proxy: available\n")
+	} else {
+		parts := []string{}
+		if !features.HasIpCommand {
+			parts = append(parts, "iproute2")
+		}
+		if !features.HasDevNetTun {
+			parts = append(parts, "/dev/net/tun")
+		}
+		if !features.CanUnshareNet {
+			parts = append(parts, "network namespace")
+		}
+		if len(parts) > 0 {
+			fmt.Printf("  Transparent proxy: unavailable (missing: %s)\n", strings.Join(parts, ", "))
+		} else {
+			fmt.Printf("  Transparent proxy: unavailable\n")
+		}
+
+		if !features.CanUnshareNet && features.HasBwrap {
+			if val := readSysctl("kernel/apparmor_restrict_unprivileged_userns"); val == "1" {
+				fmt.Printf("\n  Note: AppArmor is restricting unprivileged user namespaces.\n")
+				fmt.Printf("  This prevents bwrap --unshare-net (needed for transparent proxy).\n")
+				fmt.Printf("  To fix:  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n")
+				fmt.Printf("  Persist: echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-greywall-userns.conf\n")
+			}
+		}
+	}
+
+	if allGood {
+		fmt.Printf("\n  Status: ready\n")
+	} else {
+		fmt.Printf("\n  Status: missing required dependencies\n")
+	}
+}
+
+func suggestInstallCmd(features *LinuxFeatures) string {
+	var missing []string
+	if !features.HasBwrap {
+		missing = append(missing, "bubblewrap")
+	}
+	if !features.HasSocat {
+		missing = append(missing, "socat")
+	}
+	pkgs := strings.Join(missing, " ")
+
+	switch {
+	case commandExists("apt-get"):
+		return fmt.Sprintf("sudo apt install %s", pkgs)
+	case commandExists("dnf"):
+		return fmt.Sprintf("sudo dnf install %s", pkgs)
+	case commandExists("yum"):
+		return fmt.Sprintf("sudo yum install %s", pkgs)
+	case commandExists("pacman"):
+		return fmt.Sprintf("sudo pacman -S %s", pkgs)
+	case commandExists("apk"):
+		return fmt.Sprintf("sudo apk add %s", pkgs)
+	case commandExists("zypper"):
+		return fmt.Sprintf("sudo zypper install %s", pkgs)
+	default:
+		return fmt.Sprintf("install %s using your package manager", pkgs)
+	}
+}
+
+func readSysctl(name string) string {
+	data, err := os.ReadFile("/proc/sys/" + name)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil

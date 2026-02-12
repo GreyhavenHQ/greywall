@@ -125,6 +125,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Version: %s\n", version)
 		fmt.Printf("  Built:   %s\n", buildTime)
 		fmt.Printf("  Commit:  %s\n", gitCommit)
+		sandbox.PrintDependencyStatus()
 		return nil
 	}
 
