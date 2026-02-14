@@ -203,19 +203,20 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 		if templatePath != "" {
 			learnedCfg, loadErr := config.Load(templatePath)
-			if loadErr != nil {
+			switch {
+			case loadErr != nil:
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to load learned template: %v\n", loadErr)
 				}
-			} else if learnedCfg != nil {
+			case learnedCfg != nil:
 				cfg = config.Merge(cfg, learnedCfg)
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall] Auto-loaded learned template for %q\n", templateLabel)
 				}
-			} else if templateName != "" {
+			case templateName != "":
 				// Explicit --template but file doesn't exist
 				return fmt.Errorf("learned template %q not found at %s\nRun: greywall templates list", templateName, templatePath)
-			} else if cmdName != "" {
+			case cmdName != "":
 				// No template found for this command - suggest creating one
 				fmt.Fprintf(os.Stderr, "[greywall] No learned template for %q. Run with --learning to create one.\n", cmdName)
 			}
@@ -503,7 +504,7 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			templatePath := sandbox.LearnedTemplatePath(name)
-			data, err := os.ReadFile(templatePath)
+			data, err := os.ReadFile(templatePath) //nolint:gosec // user-specified template path - intentional
 			if err != nil {
 				if os.IsNotExist(err) {
 					return fmt.Errorf("template %q not found\nRun: greywall templates list", name)

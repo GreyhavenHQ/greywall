@@ -166,11 +166,11 @@ func GenerateLearnedTemplate(straceLogPath, cmdName string, debug bool) (string,
 
 	// Save template
 	templatePath := LearnedTemplatePath(cmdName)
-	if err := os.MkdirAll(filepath.Dir(templatePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(templatePath), 0o750); err != nil {
 		return "", fmt.Errorf("failed to create template directory: %w", err)
 	}
 
-	if err := os.WriteFile(templatePath, []byte(template), 0o644); err != nil {
+	if err := os.WriteFile(templatePath, []byte(template), 0o600); err != nil {
 		return "", fmt.Errorf("failed to write template: %w", err)
 	}
 
@@ -305,11 +305,7 @@ func isSensitivePath(path, home string) bool {
 
 	// Check GPG
 	gnupgDir := filepath.Join(home, ".gnupg")
-	if strings.HasPrefix(path, gnupgDir+"/") {
-		return true
-	}
-
-	return false
+	return strings.HasPrefix(path, gnupgDir+"/")
 }
 
 // getDangerousFilePatterns returns denyWrite entries for DangerousFiles.

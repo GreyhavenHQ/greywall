@@ -41,7 +41,7 @@ func ParseStraceLog(logPath string, debug bool) (*StraceResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open strace log: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	home, _ := os.UserHomeDir()
 	seenWrite := make(map[string]bool)

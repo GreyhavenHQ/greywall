@@ -127,7 +127,7 @@ func TestParseStraceLog(t *testing.T) {
 	}, "\n")
 
 	logFile := filepath.Join(t.TempDir(), "strace.log")
-	if err := os.WriteFile(logFile, []byte(logContent), 0o644); err != nil {
+	if err := os.WriteFile(logFile, []byte(logContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

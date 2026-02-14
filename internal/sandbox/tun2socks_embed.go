@@ -38,14 +38,14 @@ func extractTun2Socks() (string, error) {
 	}
 
 	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("tun2socks: failed to write binary: %w", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
-	if err := os.Chmod(tmpFile.Name(), 0o755); err != nil {
-		os.Remove(tmpFile.Name())
+	if err := os.Chmod(tmpFile.Name(), 0o755); err != nil { //nolint:gosec // executable binary needs execute permission
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("tun2socks: failed to make executable: %w", err)
 	}
 

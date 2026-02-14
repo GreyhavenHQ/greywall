@@ -201,7 +201,7 @@ type LandlockRuleset struct {
 func NewLandlockRuleset(debug bool) (*LandlockRuleset, error) {
 	features := DetectLinuxFeatures()
 	if !features.CanUseLandlock() {
-		return nil, fmt.Errorf("Landlock not available (kernel %d.%d, need 5.13+)",
+		return nil, fmt.Errorf("landlock not available (kernel %d.%d, need 5.13+)",
 			features.KernelMajor, features.KernelMinor)
 	}
 
@@ -438,7 +438,7 @@ func (l *LandlockRuleset) addPathRule(path string, access uint64) error {
 // Apply applies the Landlock ruleset to the current process.
 func (l *LandlockRuleset) Apply() error {
 	if !l.initialized {
-		return fmt.Errorf("Landlock ruleset not initialized")
+		return fmt.Errorf("landlock ruleset not initialized")
 	}
 
 	// Set NO_NEW_PRIVS first (required for Landlock)

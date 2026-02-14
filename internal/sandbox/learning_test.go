@@ -70,9 +70,7 @@ func TestFindApplicationDirectory(t *testing.T) {
 
 func TestCollapsePaths(t *testing.T) {
 	// Temporarily override home for testing
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", "/home/testuser")
-	defer os.Setenv("HOME", origHome)
+	t.Setenv("HOME", "/home/testuser")
 
 	tests := []struct {
 		name        string
@@ -319,9 +317,7 @@ func TestToTildePath(t *testing.T) {
 func TestListLearnedTemplates(t *testing.T) {
 	// Use a temp dir to isolate from real user config
 	tmpDir := t.TempDir()
-	origConfigDir := os.Getenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_HOME", tmpDir)
-	defer os.Setenv("XDG_CONFIG_HOME", origConfigDir)
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 	// Initially empty
 	templates, err := ListLearnedTemplates()
@@ -334,10 +330,18 @@ func TestListLearnedTemplates(t *testing.T) {
 
 	// Create some templates
 	dir := LearnedTemplateDir()
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}"), 0o644)
-	os.WriteFile(filepath.Join(dir, "myapp.json"), []byte("{}"), 0o644)
-	os.WriteFile(filepath.Join(dir, "notjson.txt"), []byte(""), 0o644) // should be ignored
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "myapp.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notjson.txt"), []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	templates, err = ListLearnedTemplates()
 	if err != nil {
@@ -415,9 +419,7 @@ func TestBuildTemplateNoAllowRead(t *testing.T) {
 func TestGenerateLearnedTemplate(t *testing.T) {
 	// Create a temp dir for templates
 	tmpDir := t.TempDir()
-	origConfigDir := os.Getenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_HOME", tmpDir)
-	defer os.Setenv("XDG_CONFIG_HOME", origConfigDir)
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 	// Create a fake strace log
 	home, _ := os.UserHomeDir()
@@ -430,7 +432,7 @@ func TestGenerateLearnedTemplate(t *testing.T) {
 	}, "\n")
 
 	logFile := filepath.Join(tmpDir, "strace.log")
-	if err := os.WriteFile(logFile, []byte(logContent), 0o644); err != nil {
+	if err := os.WriteFile(logFile, []byte(logContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -444,7 +446,7 @@ func TestGenerateLearnedTemplate(t *testing.T) {
 	}
 
 	// Read and verify template
-	data, err := os.ReadFile(templatePath)
+	data, err := os.ReadFile(templatePath) //nolint:gosec // reading test-generated template file
 	if err != nil {
 		t.Fatalf("failed to read template: %v", err)
 	}

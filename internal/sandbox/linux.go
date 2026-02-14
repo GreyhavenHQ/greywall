@@ -564,7 +564,7 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, debug bool) []stri
 				if emptyFile == "" {
 					emptyFile = filepath.Join(os.TempDir(), "greywall", "empty")
 					_ = os.MkdirAll(filepath.Dir(emptyFile), 0o750)
-					_ = os.WriteFile(emptyFile, nil, 0o444)
+					_ = os.WriteFile(emptyFile, nil, 0o444) //nolint:gosec // intentionally world-readable empty file for bind-mount masking
 				}
 				args = append(args, "--ro-bind", emptyFile, p)
 				if debug {
@@ -685,15 +685,16 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 
 	defaultDenyRead := cfg != nil && cfg.Filesystem.IsDefaultDenyRead()
 
-	if opts.Learning {
+	switch {
+	case opts.Learning:
 		// Skip defaultDenyRead logic in learning mode (already set up above)
-	} else if defaultDenyRead {
+	case defaultDenyRead:
 		// Deny-by-default mode: start with empty root, then whitelist system paths + CWD
 		if opts.Debug {
 			fmt.Fprintf(os.Stderr, "[greywall:linux] DefaultDenyRead mode enabled - tmpfs root with selective mounts\n")
 		}
 		bwrapArgs = append(bwrapArgs, buildDenyByDefaultMounts(cfg, cwd, opts.Debug)...)
-	} else {
+	default:
 		// Legacy mode: bind entire root filesystem read-only
 		bwrapArgs = append(bwrapArgs, "--ro-bind", "/", "/")
 	}
@@ -929,7 +930,7 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 					// Supported by glibc, Go 1.21+, c-ares, and most DNS resolver libraries.
 					_, _ = tmpResolv.WriteString("nameserver 1.1.1.1\nnameserver 8.8.8.8\noptions use-vc\n")
 				}
-				tmpResolv.Close()
+				_ = tmpResolv.Close()
 				dnsRelayResolvConf = tmpResolv.Name()
 				bwrapArgs = append(bwrapArgs, "--ro-bind", dnsRelayResolvConf, "/etc/resolv.conf")
 				if opts.Debug {
@@ -1077,7 +1078,8 @@ sleep 0.3
 	// after the main command exits; the user can Ctrl+C to stop it.
 	// A SIGCHLD trap kills strace once its direct child exits, handling
 	// the common case of background daemons (LSP servers, watchers).
-	if opts.Learning && opts.StraceLogPath != "" {
+	switch {
+	case opts.Learning && opts.StraceLogPath != "":
 		innerScript.WriteString(fmt.Sprintf(`# Learning mode: trace filesystem access (foreground for terminal access)
 strace -f -qq -I2 -e trace=openat,open,creat,mkdir,mkdirat,unlinkat,renameat,renameat2,symlinkat,linkat -o %s -- %s
 GREYWALL_STRACE_EXIT=$?
@@ -1089,7 +1091,7 @@ exit $GREYWALL_STRACE_EXIT
 `,
 			ShellQuoteSingle(opts.StraceLogPath), command,
 		))
-	} else if useLandlockWrapper {
+	case useLandlockWrapper:
 		// Use Landlock wrapper if available
 		// Pass config via environment variable (serialized as JSON)
 		// This ensures allowWrite/denyWrite rules are properly applied
@@ -1110,7 +1112,7 @@ exit $GREYWALL_STRACE_EXIT
 
 		// Use exec to replace bash with the wrapper (which will exec the command)
 		innerScript.WriteString(fmt.Sprintf("exec %s\n", ShellQuote(wrapperArgs)))
-	} else {
+	default:
 		innerScript.WriteString(command)
 		innerScript.WriteString("\n")
 	}

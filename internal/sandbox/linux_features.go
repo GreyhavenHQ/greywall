@@ -370,7 +370,7 @@ func suggestInstallCmd(features *LinuxFeatures) string {
 }
 
 func readSysctl(name string) string {
-	data, err := os.ReadFile("/proc/sys/" + name)
+	data, err := os.ReadFile("/proc/sys/" + name) //nolint:gosec // reading sysctl values - trusted kernel path
 	if err != nil {
 		return ""
 	}

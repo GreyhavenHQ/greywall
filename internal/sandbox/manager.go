@@ -78,7 +78,7 @@ func (m *Manager) Initialize() error {
 			bridge, err := NewProxyBridge(m.config.Network.ProxyURL, m.debug)
 			if err != nil {
 				if m.tun2socksPath != "" {
-					os.Remove(m.tun2socksPath)
+					_ = os.Remove(m.tun2socksPath)
 				}
 				return fmt.Errorf("failed to initialize proxy bridge: %w", err)
 			}
@@ -90,7 +90,7 @@ func (m *Manager) Initialize() error {
 				if err != nil {
 					m.proxyBridge.Cleanup()
 					if m.tun2socksPath != "" {
-						os.Remove(m.tun2socksPath)
+						_ = os.Remove(m.tun2socksPath)
 					}
 					return fmt.Errorf("failed to initialize DNS bridge: %w", err)
 				}
@@ -108,7 +108,7 @@ func (m *Manager) Initialize() error {
 					m.proxyBridge.Cleanup()
 				}
 				if m.tun2socksPath != "" {
-					os.Remove(m.tun2socksPath)
+					_ = os.Remove(m.tun2socksPath)
 				}
 				return fmt.Errorf("failed to initialize reverse bridge: %w", err)
 			}
@@ -166,7 +166,7 @@ func (m *Manager) wrapCommandLearning(command string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create strace log file: %w", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 	m.straceLogPath = tmpFile.Name()
 
 	m.logDebug("Strace log file: %s", m.straceLogPath)
@@ -193,7 +193,7 @@ func (m *Manager) GenerateLearnedTemplate(cmdName string) (string, error) {
 	}
 
 	// Clean up strace log since we've processed it
-	os.Remove(m.straceLogPath)
+	_ = os.Remove(m.straceLogPath)
 	m.straceLogPath = ""
 
 	return templatePath, nil
@@ -211,10 +211,10 @@ func (m *Manager) Cleanup() {
 		m.proxyBridge.Cleanup()
 	}
 	if m.tun2socksPath != "" {
-		os.Remove(m.tun2socksPath)
+		_ = os.Remove(m.tun2socksPath)
 	}
 	if m.straceLogPath != "" {
-		os.Remove(m.straceLogPath)
+		_ = os.Remove(m.straceLogPath)
 		m.straceLogPath = ""
 	}
 	m.logDebug("Sandbox manager cleaned up")

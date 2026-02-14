@@ -70,7 +70,7 @@ build-darwin:
 install-lint-tools:
 	@echo "Installing linting tools..."
 	go install mvdan.cc/gofumpt@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	@echo "Linting tools installed"
 
 setup: deps install-lint-tools
