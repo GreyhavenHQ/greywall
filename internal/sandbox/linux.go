@@ -976,6 +976,14 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		fmt.Fprintf(os.Stderr, "[greywall:linux] Skipping Landlock wrapper (running as library, not greywall CLI)\n")
 	}
 
+	// Bind-mount the greywall binary into the sandbox so the Landlock wrapper
+	// can re-execute it. Without this, running greywall from a directory that
+	// isn't the CWD (e.g., ~/bin/greywall from /home/user/project) would fail
+	// because the binary path doesn't exist inside the sandbox.
+	if useLandlockWrapper && greywallExePath != "" {
+		bwrapArgs = append(bwrapArgs, "--ro-bind", greywallExePath, greywallExePath)
+	}
+
 	bwrapArgs = append(bwrapArgs, "--", shellPath, "-c")
 
 	// Build the inner command that sets up tun2socks and runs the user command
