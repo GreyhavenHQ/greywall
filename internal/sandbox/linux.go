@@ -681,6 +681,14 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 			bwrapArgs = append(bwrapArgs, "--bind", cwd, cwd)
 		}
 
+		// Make XDG_RUNTIME_DIR writable so dconf and other runtime services
+		// (Wayland, PulseAudio, D-Bus) work inside the sandbox.
+		// Writes to /run/ are already filtered out by the learning parser.
+		xdgRuntime := os.Getenv("XDG_RUNTIME_DIR")
+		if xdgRuntime != "" && fileExists(xdgRuntime) {
+			bwrapArgs = append(bwrapArgs, "--bind", xdgRuntime, xdgRuntime)
+		}
+
 	}
 
 	defaultDenyRead := cfg != nil && cfg.Filesystem.IsDefaultDenyRead()
