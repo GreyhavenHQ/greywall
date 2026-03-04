@@ -44,7 +44,7 @@ if [ -x "$INSTALL_DIR/$BINARY" ]; then
   echo "New version:           $BINARY $VERSION_NUM"
   echo "Release notes:         https://github.com/$REPO/releases/tag/$VERSION"
   printf "Replace existing installation? [y/N] "
-  read -r REPLY
+  read -r REPLY </dev/tty
   case "$REPLY" in
     [yY]*) ;;
     *)     echo "Aborted."; exit 0 ;;
@@ -94,7 +94,7 @@ if ! command -v greyproxy >/dev/null 2>&1 && [ ! -x "$INSTALL_DIR/greyproxy" ]; 
   echo ""
   echo "greyproxy is not installed. It is required for network proxying in sandboxed commands."
   printf "Run 'greywall setup' to install it now? [Y/n] "
-  read -r REPLY
+  read -r REPLY </dev/tty
   case "$REPLY" in
     [nN]*) ;;
     *)     "$INSTALL_DIR/$BINARY" setup ;;
