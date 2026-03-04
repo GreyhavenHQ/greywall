@@ -1,6 +1,6 @@
 # Greywall
 
-Sandboxing layer for GreyHaven that wraps commands in restrictive sandbox environments. Blocks network access by default (allowlist-based), restricts filesystem operations, and controls command execution. Supports macOS (sandbox-exec/Seatbelt) and Linux (bubblewrap + seccomp/Landlock/eBPF).
+Deny-by-default command sandbox. Wraps commands with restricted filesystem access (current directory only by default) and transparent network redirection through [greyproxy](https://github.com/GreyhavenHQ/greyproxy). Supports `--learning` mode to trace filesystem access and auto-generate config templates. Linux only (bubblewrap + seccomp/Landlock/eBPF); macOS support coming.
 
 ## Build & Run
 
