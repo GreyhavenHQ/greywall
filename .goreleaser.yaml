@@ -1,10 +1,5 @@
 version: 2
 
-gitea_urls:
-  api: https://gitea.app.monadical.io/api/v1
-  download: https://gitea.app.monadical.io
-  skip_tls_verify: false
-
 before:
   hooks:
     - go mod tidy
@@ -26,6 +21,14 @@ builds:
     binary: greywall
     main: ./cmd/greywall
 
+upx:
+  - enabled: true
+    goos: [linux]
+    goarch: [arm64, amd64]
+    compress: best
+    lzma: true
+    brute: true
+
 archives:
   - formats: [tar.gz]
     name_template: >-
@@ -45,10 +48,11 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
 changelog:
   sort: asc
-  use: gitea
-  format: "{{ .SHA }}: {{ .Message }}{{ with .AuthorUsername }} (@{{ . }}){{ end }}"
   filters:
     exclude:
       - "^test:"
@@ -81,8 +85,6 @@ changelog:
       order: 9999
 
 release:
-  gitea:
-    owner: monadical
-    name: greywall
   draft: false
   prerelease: auto
+  mode: keep-existing

@@ -1,88 +1,36 @@
-name: Release
+name: goreleaser
 
 on:
   push:
+    # run only against tags
     tags:
-      - "v*"
-
-run-name: "Release ${{ github.ref_name }}"
+      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   goreleaser:
-    permissions:
-      contents: write
-      id-token: write # Required for SLSA
     runs-on: ubuntu-latest
-    outputs:
-      hashes: ${{ steps.hash.outputs.hashes }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - run: git fetch --force --tags
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Install UPX
+        uses: crazy-max/ghaction-upx@v3
+        with:
+          install-only: true
+      - name: Download tun2socks binaries
+        run: make download-tun2socks
+      - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate hashes for provenance
-        id: hash
-        run: |
-          cd dist
-          echo "hashes=$(sha256sum * | grep -v checksums.txt | base64 -w0)" >> "$GITHUB_OUTPUT"
-
-  provenance:
-    needs: [goreleaser]
-    permissions:
-      actions: read
-      id-token: write
-      contents: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
-    with:
-      base64-subjects: "${{ needs.goreleaser.outputs.hashes }}"
-      upload-assets: true
-
-  publish-version:
-    needs: [goreleaser]
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout gh-pages
-        uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-
-      - name: Update latest version
-        run: |
-          echo "${{ github.ref_name }}" > latest.txt
-
-          cat > latest.json << EOF
-          {
-            "version": "${{ github.ref_name }}",
-            "published_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "url": "https://gitea.app.monadical.io/monadical/greywall/releases/tag/${{ github.ref_name }}"
-          }
-          EOF
-
-      - name: Commit and push to gh-pages
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add latest.txt latest.json
-          git commit -m "Update latest version to ${{ github.ref_name }}" || echo "No changes to commit"
-          git push origin gh-pages

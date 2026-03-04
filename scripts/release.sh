@@ -149,5 +149,5 @@ git push origin "$NEW_VERSION"
 
 echo ""
 info "✓ Released $NEW_VERSION"
-info "Gitea Actions will now build and publish the release."
-info "Watch progress at: https://gitea.app.monadical.io/monadical/greywall/actions"
+info "GitHub Actions will now build and publish the release."
+info "Watch progress at: https://github.com/Monadical-SAS/greywall/actions"
