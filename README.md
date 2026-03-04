@@ -4,6 +4,8 @@ Greywall wraps commands in a deny-by-default sandbox. Filesystem access is restr
 
 *Note: linux only at the moment, macos support is coming!*
 
+https://github.com/user-attachments/assets/7d62d45d-a201-4f24-9138-b460e4c157a8
+
 ```bash
 # Sandbox a command (network + filesystem denied by default)
 greywall -- curl https://example.com
