@@ -92,8 +92,10 @@ jobs:
           # Configure subuid/subgid for the runner user (required for unprivileged user namespaces)
           echo "$(whoami):100000:65536" | sudo tee -a /etc/subuid
           echo "$(whoami):100000:65536" | sudo tee -a /etc/subgid
-          # Note: unprivileged user namespaces are enabled on modern Ubuntu runners,
-          # so bwrap does NOT need setuid. Setuid mode disallows --cap-add for non-root.
+          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor.
+          # Disable the restriction so bwrap can create namespaces without setuid.
+          # (Setuid mode disallows --cap-add for non-root, which greywall needs for transparent proxy.)
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Verify sandbox dependencies
         run: |
