@@ -25,11 +25,11 @@ GREYWALL_BIN="${1:-}"
 if [[ -z "$GREYWALL_BIN" ]]; then
     if [[ -x "./greywall" ]]; then
         GREYWALL_BIN="./greywall"
-    elif [[ -x "./dis./greywall" ]]; then
-        GREYWALL_BIN="./dis./greywall"
+    elif [[ -x "./dist/greywall" ]]; then
+        GREYWALL_BIN="./dist/greywall"
     else
         echo "Building greywall..."
-        go build -o ./greywall ./cm./greywall
+        go build -o ./greywall ./cmd/greywall
         GREYWALL_BIN="./greywall"
     fi
 fi
@@ -121,7 +121,7 @@ run_test "read file in workspace" "pass" "$GREYWALL_BIN" -c "cat $WORKSPACE/test
 
 # Test: Write outside workspace blocked
 # Create a settings file that only allows write to current workspace
-SETTINGS_FILE="$WORKSPAC./greywall.json"
+SETTINGS_FILE="$WORKSPACE/greywall.json"
 cat > "$SETTINGS_FILE" << EOF
 {
   "filesystem": {
