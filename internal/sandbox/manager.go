@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
 	"github.com/GreyhavenHQ/greywall/internal/platform"
@@ -68,28 +69,60 @@ func (m *Manager) Initialize() error {
 		return fmt.Errorf("sandbox is not supported on platform: %s", platform.Detect())
 	}
 
-	// On macOS in learning mode, launch eslogger directly to trace filesystem access.
-	// eslogger requires root (Endpoint Security framework), so greywall must be
-	// run with sudo for learning mode on macOS.
+	// On macOS in learning mode, launch eslogger via sudo to trace filesystem access.
+	// Only eslogger itself needs root (Endpoint Security framework) — the sandboxed
+	// command runs as the current user.
 	if platform.Detect() == platform.MacOS && m.learning {
 		logFile, err := os.CreateTemp("", "greywall-eslogger-*.log")
 		if err != nil {
 			return fmt.Errorf("failed to create eslogger log file: %w", err)
 		}
 		m.esloggerLogPath = logFile.Name()
-		m.logDebug("Starting eslogger, log: %s", m.esloggerLogPath)
+		m.logDebug("Starting eslogger (via sudo), log: %s", m.esloggerLogPath)
 
-		//nolint:gosec // eslogger path is hardcoded, event types are constants
-		cmd := exec.Command("/usr/bin/eslogger", "open", "create", "write", "unlink", "truncate", "rename", "link", "fork")
+		// Validate sudo credentials upfront so the password prompt happens before
+		// the user's command starts (which may take over the terminal).
+		//nolint:gosec // sudo path is hardcoded
+		sudoValidate := exec.Command("/usr/bin/sudo", "-v")
+		sudoValidate.Stdin = os.Stdin
+		sudoValidate.Stdout = os.Stderr
+		sudoValidate.Stderr = os.Stderr
+		if err := sudoValidate.Run(); err != nil {
+			_ = logFile.Close()
+			_ = os.Remove(m.esloggerLogPath)
+			return fmt.Errorf("sudo authentication failed (needed for eslogger): %w", err)
+		}
+
+		//nolint:gosec // eslogger and sudo paths are hardcoded, event types are constants
+		cmd := exec.Command("/usr/bin/sudo", "/usr/bin/eslogger", "open", "create", "write", "unlink", "truncate", "rename", "link", "fork")
 		cmd.Stdout = logFile
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
 			_ = logFile.Close()
 			_ = os.Remove(m.esloggerLogPath)
-			return fmt.Errorf("failed to start eslogger (requires root/sudo): %w", err)
+			return fmt.Errorf("failed to start eslogger: %w", err)
 		}
 		m.esloggerCmd = cmd
 		_ = logFile.Close() // eslogger owns the fd now via its stdout
+
+		// Wait for eslogger to connect to Endpoint Security and start emitting events.
+		// Once connected, it immediately logs events from all processes on the system,
+		// so any data in the log file means it's ready.
+		m.logDebug("Waiting for eslogger to become ready...")
+		ready := false
+		for range 50 { // up to 5 seconds
+			info, err := os.Stat(m.esloggerLogPath)
+			if err == nil && info.Size() > 0 {
+				ready = true
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !ready {
+			m.logDebug("eslogger did not produce output within 5s, proceeding anyway")
+		} else {
+			m.logDebug("eslogger is ready")
+		}
 
 		m.initialized = true
 		return nil
