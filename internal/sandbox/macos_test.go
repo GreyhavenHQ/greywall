@@ -61,7 +61,7 @@ func TestMacOS_NetworkRestrictionWithProxy(t *testing.T) {
 				}
 
 				profile := GenerateSandboxProfile(params)
-				expectedRule := `(allow network-outbound (remote ip "` + tt.proxyHost + ":" + tt.proxyPort + `"))`
+				expectedRule := `(allow network-outbound (remote tcp "` + tt.proxyHost + ":" + tt.proxyPort + `"))`
 				if !strings.Contains(profile, expectedRule) {
 					t.Errorf("profile should contain proxy outbound rule %q", expectedRule)
 				}

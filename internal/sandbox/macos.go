@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -32,6 +33,10 @@ type MacOSSandboxParams struct {
 	ProxyURL                string // External proxy URL (for env vars)
 	ProxyHost               string // Proxy host (for sandbox profile network rules)
 	ProxyPort               string // Proxy port (for sandbox profile network rules)
+	HTTPProxyHost           string // HTTP CONNECT proxy host
+	HTTPProxyPort           string // HTTP CONNECT proxy port
+	DnsProxyHost            string // DNS proxy host
+	DnsProxyPort            string // DNS proxy port
 	AllowUnixSockets        []string
 	AllowAllUnixSockets     bool
 	AllowLocalBinding       bool
@@ -594,9 +599,20 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 			}
 		}
 
-		// Allow outbound to the external proxy host:port
+		// Allow outbound to the SOCKS5 proxy (TCP)
 		if params.ProxyHost != "" && params.ProxyPort != "" {
-			fmt.Fprintf(&profile, "(allow network-outbound (remote ip \"%s:%s\"))\n", params.ProxyHost, params.ProxyPort)
+			fmt.Fprintf(&profile, "(allow network-outbound (remote tcp \"%s:%s\"))\n", params.ProxyHost, params.ProxyPort)
+		}
+
+		// Allow outbound to the HTTP CONNECT proxy (TCP)
+		if params.HTTPProxyHost != "" && params.HTTPProxyPort != "" {
+			fmt.Fprintf(&profile, "(allow network-outbound (remote tcp \"%s:%s\"))\n", params.HTTPProxyHost, params.HTTPProxyPort)
+		}
+
+		// Allow outbound to the DNS proxy (TCP+UDP)
+		if params.DnsProxyHost != "" && params.DnsProxyPort != "" {
+			fmt.Fprintf(&profile, "(allow network-outbound (remote tcp \"%s:%s\"))\n", params.DnsProxyHost, params.DnsProxyPort)
+			fmt.Fprintf(&profile, "(allow network-outbound (remote udp \"%s:%s\"))\n", params.DnsProxyHost, params.DnsProxyPort)
 		}
 	}
 	profile.WriteString("\n")
@@ -645,12 +661,29 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, de
 		allowLocalOutbound = *cfg.Network.AllowLocalOutbound
 	}
 
-	// Parse proxy URL for network rules
+	// Parse proxy URLs for network rules
 	var proxyHost, proxyPort string
 	if cfg.Network.ProxyURL != "" {
 		if u, err := url.Parse(cfg.Network.ProxyURL); err == nil {
 			proxyHost = u.Hostname()
 			proxyPort = u.Port()
+		}
+	}
+
+	var httpProxyHost, httpProxyPort string
+	if cfg.Network.HTTPProxyURL != "" {
+		if u, err := url.Parse(cfg.Network.HTTPProxyURL); err == nil {
+			httpProxyHost = u.Hostname()
+			httpProxyPort = u.Port()
+		}
+	}
+
+	var dnsProxyHost, dnsProxyPort string
+	if cfg.Network.DnsAddr != "" {
+		host, port, err := net.SplitHostPort(cfg.Network.DnsAddr)
+		if err == nil {
+			dnsProxyHost = host
+			dnsProxyPort = port
 		}
 	}
 
@@ -664,6 +697,10 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, de
 		ProxyURL:                cfg.Network.ProxyURL,
 		ProxyHost:               proxyHost,
 		ProxyPort:               proxyPort,
+		HTTPProxyHost:           httpProxyHost,
+		HTTPProxyPort:           httpProxyPort,
+		DnsProxyHost:            dnsProxyHost,
+		DnsProxyPort:            dnsProxyPort,
 		AllowUnixSockets:        cfg.Network.AllowUnixSockets,
 		AllowAllUnixSockets:     cfg.Network.AllowAllUnixSockets,
 		AllowLocalBinding:       allowLocalBinding,
