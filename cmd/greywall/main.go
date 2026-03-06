@@ -264,18 +264,20 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// - If a command name is available, use it as the username with "proxy" as password.
 	// - If no command name, default to "proxy:proxy" (required by gost for auth).
 	// This always overrides any existing credentials in the URL.
-	if cfg.Network.ProxyURL != "" {
-		if u, err := url.Parse(cfg.Network.ProxyURL); err == nil {
-			proxyUser := "proxy"
-			if cmdName != "" {
-				proxyUser = cmdName
-			}
-			u.User = url.UserPassword(proxyUser, "proxy")
-			cfg.Network.ProxyURL = u.String()
-			if debug {
-				fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy credentials to %q:proxy\n", proxyUser)
+	proxyUser := "proxy"
+	if cmdName != "" {
+		proxyUser = cmdName
+	}
+	for _, proxyField := range []*string{&cfg.Network.ProxyURL, &cfg.Network.HTTPProxyURL} {
+		if *proxyField != "" {
+			if u, err := url.Parse(*proxyField); err == nil {
+				u.User = url.UserPassword(proxyUser, "proxy")
+				*proxyField = u.String()
 			}
 		}
+	}
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy credentials to %q:proxy\n", proxyUser)
 	}
 
 	// Learning mode setup
