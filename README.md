@@ -22,7 +22,7 @@ greywall -c "rm -rf /"  # → blocked by command deny rules
 
 ## Install
 
-**Linux:**
+**Linux / Mac:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/GreyhavenHQ/greywall/main/install.sh | sh
