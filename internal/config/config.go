@@ -26,8 +26,9 @@ type Config struct {
 
 // NetworkConfig defines network restrictions.
 type NetworkConfig struct {
-	ProxyURL            string   `json:"proxyUrl,omitempty"` // External SOCKS5 proxy (e.g. socks5://host:1080)
-	DnsAddr             string   `json:"dnsAddr,omitempty"`  // DNS server address on host (e.g. localhost:3153)
+	ProxyURL            string   `json:"proxyUrl,omitempty"`     // External SOCKS5 proxy (e.g. socks5://host:1080)
+	HTTPProxyURL        string   `json:"httpProxyUrl,omitempty"` // HTTP CONNECT proxy (e.g. http://host:43051)
+	DnsAddr             string   `json:"dnsAddr,omitempty"`      // DNS server address on host (e.g. localhost:3153)
 	AllowUnixSockets    []string `json:"allowUnixSockets,omitempty"`
 	AllowAllUnixSockets bool     `json:"allowAllUnixSockets,omitempty"`
 	AllowLocalBinding   bool     `json:"allowLocalBinding,omitempty"`
@@ -203,6 +204,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("invalid network.proxyUrl %q: %w", c.Network.ProxyURL, err)
 		}
 	}
+	if c.Network.HTTPProxyURL != "" {
+		if err := validateHTTPProxyURL(c.Network.HTTPProxyURL); err != nil {
+			return fmt.Errorf("invalid network.httpProxyUrl %q: %w", c.Network.HTTPProxyURL, err)
+		}
+	}
 	if c.Network.DnsAddr != "" {
 		if err := validateHostPort(c.Network.DnsAddr); err != nil {
 			return fmt.Errorf("invalid network.dnsAddr %q: %w", c.Network.DnsAddr, err)
@@ -269,6 +275,24 @@ func validateProxyURL(proxyURL string) error {
 	}
 	if u.Port() == "" {
 		return errors.New("proxy URL must include a port")
+	}
+	return nil
+}
+
+// validateHTTPProxyURL validates an HTTP CONNECT proxy URL.
+func validateHTTPProxyURL(proxyURL string) error {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("HTTP proxy URL must use http:// or https:// scheme")
+	}
+	if u.Hostname() == "" {
+		return errors.New("HTTP proxy URL must include a hostname")
+	}
+	if u.Port() == "" {
+		return errors.New("HTTP proxy URL must include a port")
 	}
 	return nil
 }
@@ -407,9 +431,10 @@ func Merge(base, override *Config) *Config {
 		AllowPty: base.AllowPty || override.AllowPty,
 
 		Network: NetworkConfig{
-			// ProxyURL/DnsAddr: override wins if non-empty
-			ProxyURL: mergeString(base.Network.ProxyURL, override.Network.ProxyURL),
-			DnsAddr:  mergeString(base.Network.DnsAddr, override.Network.DnsAddr),
+			// ProxyURL/HTTPProxyURL/DnsAddr: override wins if non-empty
+			ProxyURL:     mergeString(base.Network.ProxyURL, override.Network.ProxyURL),
+			HTTPProxyURL: mergeString(base.Network.HTTPProxyURL, override.Network.HTTPProxyURL),
+			DnsAddr:      mergeString(base.Network.DnsAddr, override.Network.DnsAddr),
 
 			// Append slices (base first, then override additions)
 			AllowUnixSockets: mergeStrings(base.Network.AllowUnixSockets, override.Network.AllowUnixSockets),

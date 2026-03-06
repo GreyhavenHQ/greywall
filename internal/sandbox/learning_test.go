@@ -425,22 +425,17 @@ func TestGenerateLearnedTemplate(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
-	// Create a fake strace log
+	// Create a fake trace result (simulating what ParseStraceLog would return)
 	home, _ := os.UserHomeDir()
-	logContent := strings.Join([]string{
-		`12345 openat(AT_FDCWD, "` + filepath.Join(home, ".cache/testapp/db.sqlite") + `", O_WRONLY|O_CREAT, 0644) = 3`,
-		`12345 openat(AT_FDCWD, "` + filepath.Join(home, ".cache/testapp/version") + `", O_WRONLY|O_CREAT, 0644) = 3`,
-		`12345 mkdirat(AT_FDCWD, "` + filepath.Join(home, ".config/testapp") + `", 0755) = 0`,
-		`12345 openat(AT_FDCWD, "/tmp/somefile", O_WRONLY|O_CREAT, 0644) = 3`,
-		`12345 openat(AT_FDCWD, "/proc/self/maps", O_RDONLY) = 3`,
-	}, "\n")
-
-	logFile := filepath.Join(tmpDir, "strace.log")
-	if err := os.WriteFile(logFile, []byte(logContent), 0o600); err != nil {
-		t.Fatal(err)
+	result := &TraceResult{
+		WritePaths: []string{
+			filepath.Join(home, ".cache/testapp/db.sqlite"),
+			filepath.Join(home, ".cache/testapp/version"),
+			filepath.Join(home, ".config/testapp"),
+		},
 	}
 
-	templatePath, err := GenerateLearnedTemplate(logFile, "testapp", false)
+	templatePath, err := GenerateLearnedTemplate(result, "testapp", false)
 	if err != nil {
 		t.Fatalf("GenerateLearnedTemplate() error: %v", err)
 	}

@@ -554,6 +554,7 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 (allow file-ioctl (literal "/dev/urandom"))
 (allow file-ioctl (literal "/dev/dtracehelper"))
 (allow file-ioctl (literal "/dev/tty"))
+(allow file-ioctl (regex #"^/dev/ttys"))
 
 (allow file-ioctl file-read-data file-write-data
   (require-all
@@ -561,6 +562,9 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
     (vnode-type CHARACTER-DEVICE)
   )
 )
+
+; Inherited terminal access (TUI apps need read/write on the actual PTY device)
+(allow file-read-data file-write-data (regex #"^/dev/ttys"))
 
 `)
 
@@ -613,16 +617,10 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 	// PTY support
 	if params.AllowPty {
 		profile.WriteString(`
-; Pseudo-terminal (pty) support
+; Pseudo-terminal allocation (pty) support
 (allow pseudo-tty)
-(allow file-ioctl
-  (literal "/dev/ptmx")
-  (regex #"^/dev/ttys")
-)
-(allow file-read* file-write*
-  (literal "/dev/ptmx")
-  (regex #"^/dev/ttys")
-)
+(allow file-ioctl (literal "/dev/ptmx"))
+(allow file-read* file-write* (literal "/dev/ptmx"))
 `)
 	}
 
@@ -699,7 +697,7 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, de
 		return "", fmt.Errorf("shell %q not found: %w", shell, err)
 	}
 
-	proxyEnvs := GenerateProxyEnvVars(cfg.Network.ProxyURL)
+	proxyEnvs := GenerateProxyEnvVars(cfg.Network.ProxyURL, cfg.Network.HTTPProxyURL)
 
 	// Build the command
 	// env VAR1=val1 VAR2=val2 sandbox-exec -p 'profile' shell -c 'command'

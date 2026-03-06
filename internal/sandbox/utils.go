@@ -49,13 +49,14 @@ func NormalizePath(pathPattern string) string {
 
 // GenerateProxyEnvVars creates environment variables for proxy configuration.
 // Used on macOS where transparent proxying is not available.
-func GenerateProxyEnvVars(proxyURL string) []string {
+// proxyURL is the SOCKS5 proxy (for ALL_PROXY), httpProxyURL is the HTTP CONNECT proxy (for HTTP_PROXY/HTTPS_PROXY).
+func GenerateProxyEnvVars(proxyURL, httpProxyURL string) []string {
 	envVars := []string{
 		"GREYWALL_SANDBOX=1",
 		"TMPDIR=/tmp/greywall",
 	}
 
-	if proxyURL == "" {
+	if proxyURL == "" && httpProxyURL == "" {
 		return envVars
 	}
 
@@ -75,13 +76,26 @@ func GenerateProxyEnvVars(proxyURL string) []string {
 	envVars = append(envVars,
 		"NO_PROXY="+noProxy,
 		"no_proxy="+noProxy,
-		"ALL_PROXY="+proxyURL,
-		"all_proxy="+proxyURL,
-		"HTTP_PROXY="+proxyURL,
-		"HTTPS_PROXY="+proxyURL,
-		"http_proxy="+proxyURL,
-		"https_proxy="+proxyURL,
 	)
+
+	// ALL_PROXY uses socks5h:// (remote DNS resolution via proxy)
+	if proxyURL != "" {
+		socksURL := strings.Replace(proxyURL, "socks5://", "socks5h://", 1)
+		envVars = append(envVars,
+			"ALL_PROXY="+socksURL,
+			"all_proxy="+socksURL,
+		)
+	}
+
+	// HTTP_PROXY/HTTPS_PROXY use the HTTP CONNECT proxy (not SOCKS5)
+	if httpProxyURL != "" {
+		envVars = append(envVars,
+			"HTTP_PROXY="+httpProxyURL,
+			"HTTPS_PROXY="+httpProxyURL,
+			"http_proxy="+httpProxyURL,
+			"https_proxy="+httpProxyURL,
+		)
+	}
 
 	return envVars
 }

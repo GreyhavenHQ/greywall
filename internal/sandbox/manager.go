@@ -3,6 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
 	"github.com/GreyhavenHQ/greywall/internal/platform"
@@ -19,9 +20,13 @@ type Manager struct {
 	debug         bool
 	monitor       bool
 	initialized   bool
-	learning      bool   // learning mode: permissive sandbox with strace
-	straceLogPath string // host-side temp file for strace output
+	learning      bool   // learning mode: permissive sandbox with strace/eslogger
+	straceLogPath string // host-side temp file for strace output (Linux)
 	commandName   string // name of the command being learned
+	// macOS learning mode fields
+	learningRootPID int       // root PID of the sandboxed command (for eslogger PID tree tracking)
+	esloggerLogPath string    // temp file for eslogger output (macOS)
+	esloggerCmd     *exec.Cmd // eslogger subprocess (macOS)
 }
 
 // NewManager creates a new sandbox manager.
@@ -61,6 +66,33 @@ func (m *Manager) Initialize() error {
 
 	if !platform.IsSupported() {
 		return fmt.Errorf("sandbox is not supported on platform: %s", platform.Detect())
+	}
+
+	// On macOS in learning mode, launch eslogger directly to trace filesystem access.
+	// eslogger requires root (Endpoint Security framework), so greywall must be
+	// run with sudo for learning mode on macOS.
+	if platform.Detect() == platform.MacOS && m.learning {
+		logFile, err := os.CreateTemp("", "greywall-eslogger-*.log")
+		if err != nil {
+			return fmt.Errorf("failed to create eslogger log file: %w", err)
+		}
+		m.esloggerLogPath = logFile.Name()
+		m.logDebug("Starting eslogger, log: %s", m.esloggerLogPath)
+
+		//nolint:gosec // eslogger path is hardcoded, event types are constants
+		cmd := exec.Command("/usr/bin/eslogger", "open", "create", "write", "unlink", "truncate", "rename", "link", "fork")
+		cmd.Stdout = logFile
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			_ = logFile.Close()
+			_ = os.Remove(m.esloggerLogPath)
+			return fmt.Errorf("failed to start eslogger (requires root/sudo): %w", err)
+		}
+		m.esloggerCmd = cmd
+		_ = logFile.Close() // eslogger owns the fd now via its stdout
+
+		m.initialized = true
+		return nil
 	}
 
 	// On Linux, set up proxy bridge and tun2socks if proxy is configured
@@ -148,6 +180,10 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 	plat := platform.Detect()
 	switch plat {
 	case platform.MacOS:
+		if m.learning {
+			// In learning mode, run command directly (no sandbox-exec wrapping)
+			return command, nil
+		}
 		return WrapCommandMacOS(m.config, command, m.exposedPorts, m.debug)
 	case platform.Linux:
 		if m.learning {
@@ -159,7 +195,7 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 	}
 }
 
-// wrapCommandLearning creates a permissive sandbox with strace for learning mode.
+// wrapCommandLearning creates a permissive sandbox with strace for learning mode (Linux).
 func (m *Manager) wrapCommandLearning(command string) (string, error) {
 	// Create host-side temp file for strace output
 	tmpFile, err := os.CreateTemp("", "greywall-strace-*.log")
@@ -181,26 +217,29 @@ func (m *Manager) wrapCommandLearning(command string) (string, error) {
 	})
 }
 
-// GenerateLearnedTemplate generates a config template from the strace log collected during learning.
+// GenerateLearnedTemplate generates a config template from the trace log collected during learning.
+// Platform-specific implementation in manager_linux.go / manager_darwin.go.
 func (m *Manager) GenerateLearnedTemplate(cmdName string) (string, error) {
-	if m.straceLogPath == "" {
-		return "", fmt.Errorf("no strace log available (was learning mode enabled?)")
-	}
+	return m.generateLearnedTemplatePlatform(cmdName)
+}
 
-	templatePath, err := GenerateLearnedTemplate(m.straceLogPath, cmdName, m.debug)
-	if err != nil {
-		return "", err
-	}
-
-	// Clean up strace log since we've processed it
-	_ = os.Remove(m.straceLogPath)
-	m.straceLogPath = ""
-
-	return templatePath, nil
+// SetLearningRootPID records the root PID of the command being learned.
+// The eslogger log parser uses this to build the process tree from fork events.
+func (m *Manager) SetLearningRootPID(pid int) {
+	m.learningRootPID = pid
+	m.logDebug("Set learning root PID: %d", pid)
 }
 
 // Cleanup stops the proxies and cleans up resources.
 func (m *Manager) Cleanup() {
+	// Stop macOS eslogger if running
+	if m.esloggerCmd != nil && m.esloggerCmd.Process != nil {
+		m.logDebug("Stopping eslogger (PID %d)", m.esloggerCmd.Process.Pid)
+		_ = m.esloggerCmd.Process.Signal(os.Interrupt)
+		_ = m.esloggerCmd.Wait()
+		m.esloggerCmd = nil
+	}
+
 	if m.reverseBridge != nil {
 		m.reverseBridge.Cleanup()
 	}
@@ -216,6 +255,10 @@ func (m *Manager) Cleanup() {
 	if m.straceLogPath != "" {
 		_ = os.Remove(m.straceLogPath)
 		m.straceLogPath = ""
+	}
+	if m.esloggerLogPath != "" {
+		_ = os.Remove(m.esloggerLogPath)
+		m.esloggerLogPath = ""
 	}
 	m.logDebug("Sandbox manager cleaned up")
 }
