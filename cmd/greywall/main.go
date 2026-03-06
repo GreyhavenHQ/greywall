@@ -32,6 +32,7 @@ var (
 	monitor       bool
 	settingsPath  string
 	proxyURL      string
+	httpProxyURL  string
 	dnsAddr       string
 	cmdString     string
 	exposePorts   []string
@@ -64,8 +65,8 @@ On Linux, greywall uses tun2socks for truly transparent proxying: all TCP/UDP tr
 from any binary is captured at the kernel level via a TUN device and forwarded
 through the external SOCKS5 proxy. No application awareness needed.
 
-On macOS, greywall uses environment variables (best-effort) to direct traffic
-to the proxy.
+On macOS, greywall uses sandbox-exec (Seatbelt) for filesystem/process isolation
+and environment variables (HTTP_PROXY, ALL_PROXY) for network proxy routing.
 
 Examples:
   greywall -- curl https://example.com                          # Blocked (no proxy)
@@ -101,6 +102,7 @@ Configuration file format:
 	rootCmd.Flags().StringVarP(&settingsPath, "settings", "s", "", "Path to settings file (default: OS config directory)")
 	rootCmd.Flags().StringVar(&proxyURL, "proxy", "", "External SOCKS5 proxy URL (default: socks5://localhost:43052)")
 	rootCmd.Flags().StringVar(&dnsAddr, "dns", "", "DNS server address on host (default: localhost:43053)")
+	rootCmd.Flags().StringVar(&httpProxyURL, "http-proxy", "", "HTTP CONNECT proxy URL (default: http://localhost:43051)")
 	rootCmd.Flags().StringVarP(&cmdString, "c", "c", "", "Run command string directly (like sh -c)")
 	rootCmd.Flags().StringArrayVarP(&exposePorts, "port", "p", nil, "Expose port for inbound connections (can be used multiple times)")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Show version information")
@@ -124,7 +126,11 @@ Configuration file format:
 
 func runCommand(cmd *cobra.Command, args []string) error {
 	if showVersion {
-		fmt.Printf("greywall %s\n", version)
+		fmt.Printf("greywall - lightweight, container-free sandbox for running untrusted commands\n")
+		fmt.Printf("  Version: %s\n", version)
+		fmt.Printf("  Built:   %s\n", buildTime)
+		fmt.Printf("  Commit:  %s\n", gitCommit)
+		sandbox.PrintDependencyStatus()
 		return nil
 	}
 
@@ -226,6 +232,9 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	if proxyURL != "" {
 		cfg.Network.ProxyURL = proxyURL
 	}
+	if httpProxyURL != "" {
+		cfg.Network.HTTPProxyURL = httpProxyURL
+	}
 	if dnsAddr != "" {
 		cfg.Network.DnsAddr = dnsAddr
 	}
@@ -236,6 +245,12 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		cfg.Network.ProxyURL = "socks5://localhost:43052"
 		if debug {
 			fmt.Fprintf(os.Stderr, "[greywall] Defaulting proxy to socks5://localhost:43052\n")
+		}
+	}
+	if cfg.Network.HTTPProxyURL == "" {
+		cfg.Network.HTTPProxyURL = "http://localhost:43051"
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall] Defaulting HTTP proxy to http://localhost:43051\n")
 		}
 	}
 	if cfg.Network.DnsAddr == "" {
@@ -249,23 +264,25 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// - If a command name is available, use it as the username with "proxy" as password.
 	// - If no command name, default to "proxy:proxy" (required by gost for auth).
 	// This always overrides any existing credentials in the URL.
-	if cfg.Network.ProxyURL != "" {
-		if u, err := url.Parse(cfg.Network.ProxyURL); err == nil {
-			proxyUser := "proxy"
-			if cmdName != "" {
-				proxyUser = cmdName
-			}
-			u.User = url.UserPassword(proxyUser, "proxy")
-			cfg.Network.ProxyURL = u.String()
-			if debug {
-				fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy credentials to %q:proxy\n", proxyUser)
+	proxyUser := "proxy"
+	if cmdName != "" {
+		proxyUser = cmdName
+	}
+	for _, proxyField := range []*string{&cfg.Network.ProxyURL, &cfg.Network.HTTPProxyURL} {
+		if *proxyField != "" {
+			if u, err := url.Parse(*proxyField); err == nil {
+				u.User = url.UserPassword(proxyUser, "proxy")
+				*proxyField = u.String()
 			}
 		}
+	}
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy credentials to %q:proxy\n", proxyUser)
 	}
 
 	// Learning mode setup
 	if learning {
-		if err := sandbox.CheckStraceAvailable(); err != nil {
+		if err := sandbox.CheckLearningAvailable(); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "[greywall] Learning mode: tracing filesystem access for %q\n", cmdName)
@@ -303,6 +320,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 	if debug {
 		fmt.Fprintf(os.Stderr, "[greywall] Sandboxed command: %s\n", sandboxedCommand)
+		fmt.Fprintf(os.Stderr, "[greywall] Executing: sh -c %q\n", sandboxedCommand)
 	}
 
 	hardenedEnv := sandbox.GetHardenedEnv()
@@ -324,6 +342,11 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// Start the command (non-blocking) so we can get the PID
 	if err := execCmd.Start(); err != nil {
 		return fmt.Errorf("failed to start command: %w", err)
+	}
+
+	// Record root PID for macOS learning mode (eslogger uses this for process tree tracking)
+	if learning && platform.Detect() == platform.MacOS && execCmd.Process != nil {
+		manager.SetLearningRootPID(execCmd.Process.Pid)
 	}
 
 	// Start Linux monitors (eBPF tracing for filesystem violations)

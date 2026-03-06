@@ -2,7 +2,7 @@
 
 Greywall wraps commands in a deny-by-default sandbox. Filesystem access is restricted to the current directory by default. Use `--learning` to trace what else a command needs and auto-generate a config template. All network traffic is transparently redirected through [greyproxy](https://github.com/GreyhavenHQ/greyproxy), a deny-by-default transparent proxy with a live allow/deny dashboard. Run `greywall setup` to install greyproxy automatically.
 
-*Note: linux only at the moment, macos support is coming!*
+*Supports Linux and macOS. See [platform support](docs/platform-support.md) for details.*
 
 https://github.com/user-attachments/assets/7d62d45d-a201-4f24-9138-b460e4c157a8
 
@@ -138,18 +138,26 @@ Use `greywall --settings ./custom.json` to specify a different config file.
 
 By default, traffic routes through the GreyProxy SOCKS5 proxy at `localhost:43052` with DNS via `localhost:43053`.
 
-## Features
+## Platform support
 
-- **Transparent proxy** - All TCP/UDP traffic captured at the kernel level via tun2socks and routed through an external SOCKS5 proxy (Linux)
-- **Network isolation** - All outbound blocked by default; traffic only flows when a proxy is available
-- **Filesystem restrictions** - Deny-by-default read mode, controlled write paths, sensitive file protection
-- **Learning mode** - Trace filesystem access with strace and auto-generate config templates
-- **Command blocking** - Deny dangerous commands (`rm -rf /`, `git push`, `shutdown`, etc.)
-- **SSH filtering** - Control which hosts and commands are allowed over SSH
-- **Environment hardening** - Strips dangerous env vars (`LD_PRELOAD`, `DYLD_*`, etc.)
-- **Violation monitoring** - Real-time logging of sandbox violations (`-m`)
-- **Shell completions** - `greywall completion bash|zsh|fish|powershell`
-- **Cross-platform** - Linux (bubblewrap + seccomp + Landlock + eBPF) and macOS (sandbox-exec)
+| Feature | Linux | macOS |
+|---------|:-----:|:-----:|
+| **Sandbox engine** | bubblewrap | sandbox-exec (Seatbelt) |
+| **Filesystem deny-by-default (read/write)** | ✅ | ✅ |
+| **Syscall filtering** | ✅ (seccomp) | ✅ (Seatbelt) |
+| **Filesystem access control** | ✅ (Landlock + bubblewrap) | ✅ (Seatbelt) |
+| **Violation monitoring** | ✅ (eBPF) | ✅ (Seatbelt denial logs) |
+| **Transparent proxy (full traffic capture)** | ✅ (tun2socks + TUN) | ❌ |
+| **DNS capture** | ✅ (DNS bridge) | ❌ |
+| **Proxy via env vars (SOCKS5 / HTTP)** | ✅ | ✅ |
+| **Network isolation** | ✅ (network namespace) | N/A |
+| **Command allow/deny lists** | ✅ | ✅ |
+| **Environment sanitization** | ✅ | ✅ |
+| **Learning mode** | ✅ (strace) | ✅ (eslogger, requires sudo) |
+| **PTY support** | ✅ | ✅ |
+| **External deps** | bwrap, socat | none |
+
+See [platform support](docs/platform-support.md) for more details.
 
 Greywall can also be used as a [Go package](docs/library.md).
 
@@ -162,6 +170,7 @@ Greywall can also be used as a [Go package](docs/library.md).
 - [Learning Mode](docs/learning.md)
 - [Security Model](docs/security-model.md)
 - [Architecture](ARCHITECTURE.md)
+- [Platform Support](docs/platform-support.md)
 - [Linux Security Features](docs/linux-security-features.md)
 - [AI Agent Integration](docs/agents.md)
 - [Library Usage (Go)](docs/library.md)

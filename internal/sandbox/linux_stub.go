@@ -64,12 +64,12 @@ func (b *ReverseBridge) Cleanup() {}
 
 // WrapCommandLinux returns an error on non-Linux platforms.
 func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, tun2socksPath string, debug bool) (string, error) {
-	return "", fmt.Errorf("Linux sandbox not available on this platform")
+	return "", fmt.Errorf("linux sandbox not available on this platform")
 }
 
 // WrapCommandLinuxWithOptions returns an error on non-Linux platforms.
 func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
-	return "", fmt.Errorf("Linux sandbox not available on this platform")
+	return "", fmt.Errorf("linux sandbox not available on this platform")
 }
 
 // StartLinuxMonitor returns nil on non-Linux platforms.

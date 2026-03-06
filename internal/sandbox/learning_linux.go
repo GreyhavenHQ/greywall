@@ -20,14 +20,8 @@ var straceSyscallRegex = regexp.MustCompile(
 // openatWriteFlags matches O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND flags in strace output.
 var openatWriteFlags = regexp.MustCompile(`O_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)`)
 
-// StraceResult holds parsed read and write paths from an strace log.
-type StraceResult struct {
-	WritePaths []string
-	ReadPaths  []string
-}
-
-// CheckStraceAvailable verifies that strace is installed and accessible.
-func CheckStraceAvailable() error {
+// CheckLearningAvailable verifies that strace is installed and accessible.
+func CheckLearningAvailable() error {
 	_, err := exec.LookPath("strace")
 	if err != nil {
 		return fmt.Errorf("strace is required for learning mode but not found: %w\n\nInstall it with: sudo apt install strace (Debian/Ubuntu) or sudo pacman -S strace (Arch)", err)
@@ -36,7 +30,7 @@ func CheckStraceAvailable() error {
 }
 
 // ParseStraceLog reads an strace output file and extracts unique read and write paths.
-func ParseStraceLog(logPath string, debug bool) (*StraceResult, error) {
+func ParseStraceLog(logPath string, debug bool) (*TraceResult, error) {
 	f, err := os.Open(logPath) //nolint:gosec // user-controlled path from temp file - intentional
 	if err != nil {
 		return nil, fmt.Errorf("failed to open strace log: %w", err)
@@ -46,7 +40,7 @@ func ParseStraceLog(logPath string, debug bool) (*StraceResult, error) {
 	home, _ := os.UserHomeDir()
 	seenWrite := make(map[string]bool)
 	seenRead := make(map[string]bool)
-	result := &StraceResult{}
+	result := &TraceResult{}
 
 	scanner := bufio.NewScanner(f)
 	// Increase buffer for long strace lines

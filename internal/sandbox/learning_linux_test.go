@@ -233,10 +233,10 @@ func TestExtractReadPath(t *testing.T) {
 	}
 }
 
-func TestCheckStraceAvailable(t *testing.T) {
+func TestCheckLearningAvailable(t *testing.T) {
 	// This test just verifies the function doesn't panic.
 	// The result depends on whether strace is installed on the test system.
-	err := CheckStraceAvailable()
+	err := CheckLearningAvailable()
 	if err != nil {
 		t.Logf("strace not available (expected in some CI environments): %v", err)
 	}

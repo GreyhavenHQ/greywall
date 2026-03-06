@@ -23,6 +23,7 @@ Greywall is a sandboxing tool that restricts network and filesystem access for a
 - [Configuration](./configuration.md) - How to configure Greywall
 - [Architecture](../ARCHITECTURE.md) - How greywall works under the hood
 - [Security model](security-model.md) - Threat model, guarantees, and limitations
+- [Platform support](platform-support.md) - Linux vs macOS feature comparison
 - [Linux security features](linux-security-features.md) - Landlock, seccomp, eBPF details and fallback behavior
 - [Testing](testing.md) - How to run tests and write new ones
 - [Benchmarking](benchmarking.md) - Performance overhead and profiling

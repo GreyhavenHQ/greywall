@@ -10,6 +10,13 @@ import (
 	"strings"
 )
 
+// TraceResult holds parsed read and write paths from a system trace log
+// (strace on Linux, eslogger on macOS).
+type TraceResult struct {
+	WritePaths []string
+	ReadPaths  []string
+}
+
 // wellKnownParents are directories under $HOME where applications typically
 // create their own subdirectory (e.g., ~/.cache/opencode, ~/.config/opencode).
 var wellKnownParents = []string{
@@ -23,6 +30,10 @@ var wellKnownParents = []string{
 
 // LearnedTemplateDir returns the directory where learned templates are stored.
 func LearnedTemplateDir() string {
+	// Prefer XDG_CONFIG_HOME if set (works cross-platform and in tests).
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "greywall", "learned")
+	}
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		home, _ := os.UserHomeDir()
@@ -52,14 +63,9 @@ func SanitizeTemplateName(name string) string {
 	return sanitized
 }
 
-// GenerateLearnedTemplate parses an strace log, collapses paths, and saves a template.
+// GenerateLearnedTemplate collapses paths from a trace result and saves a template.
 // Returns the path where the template was saved.
-func GenerateLearnedTemplate(straceLogPath, cmdName string, debug bool) (string, error) {
-	result, err := ParseStraceLog(straceLogPath, debug)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse strace log: %w", err)
-	}
-
+func GenerateLearnedTemplate(result *TraceResult, cmdName string, debug bool) (string, error) {
 	home, _ := os.UserHomeDir()
 
 	// Filter write paths: remove default writable and sensitive paths
@@ -231,8 +237,9 @@ func CollapsePaths(paths []string) []string {
 		}
 	}
 
-	// Sort and deduplicate (remove sub-paths of other paths)
+	// Sort, remove exact duplicates, then remove sub-paths of other paths
 	sort.Strings(result)
+	result = removeDuplicates(result)
 	result = deduplicateSubPaths(result)
 
 	return result
@@ -388,6 +395,20 @@ func deduplicateSubPaths(paths []string) []string {
 		}
 	}
 
+	return result
+}
+
+// removeDuplicates removes exact duplicate strings from a sorted slice.
+func removeDuplicates(paths []string) []string {
+	if len(paths) <= 1 {
+		return paths
+	}
+	result := []string{paths[0]}
+	for i := 1; i < len(paths); i++ {
+		if paths[i] != paths[i-1] {
+			result = append(result, paths[i])
+		}
+	}
 	return result
 }
 

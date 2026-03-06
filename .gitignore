@@ -31,4 +31,5 @@ mem.out
 
 # Embedded binaries (downloaded at build time)
 internal/sandbox/bin/tun2socks-*
+tun2socks/
 
