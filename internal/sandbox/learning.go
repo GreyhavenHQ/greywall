@@ -30,6 +30,10 @@ var wellKnownParents = []string{
 
 // LearnedTemplateDir returns the directory where learned templates are stored.
 func LearnedTemplateDir() string {
+	// Prefer XDG_CONFIG_HOME if set (works cross-platform and in tests).
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "greywall", "learned")
+	}
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		home, _ := os.UserHomeDir()
