@@ -1,11 +1,14 @@
 package profiles
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
 	"github.com/GreyhavenHQ/greywall/internal/sandbox"
@@ -63,7 +66,7 @@ func ResolveFirstRun(cmdName string, hasTemplate bool, debug bool) (*config.Conf
 		return nil, nil
 	}
 
-	response := PromptFirstRun(cmdName, os.Stderr, os.Stdin)
+	response := PromptFirstRun(cmdName, profile, os.Stderr, os.Stdin)
 
 	switch response {
 	case PromptYes:
@@ -71,6 +74,22 @@ func ResolveFirstRun(cmdName string, hasTemplate bool, debug bool) (*config.Conf
 			fmt.Fprintf(os.Stderr, "[greywall] Warning: could not save profile as template: %v\n", saveErr)
 		}
 		return profile, nil
+
+	case PromptEdit:
+		if saveErr := SaveAsTemplate(profile, cmdName, debug); saveErr != nil {
+			return nil, fmt.Errorf("could not save profile for editing: %w", saveErr)
+		}
+		templatePath := sandbox.LearnedTemplatePath(cmdName)
+		edited, editErr := editAndValidate(templatePath)
+		if editErr != nil {
+			fmt.Fprintf(os.Stderr, "[greywall] Warning: could not open editor: %v\n", editErr)
+			fmt.Fprintf(os.Stderr, "[greywall] Edit manually: %s\n", templatePath)
+			return profile, nil
+		}
+		if edited == nil {
+			return profile, nil
+		}
+		return edited, nil
 
 	case PromptNever:
 		if suppressErr := AddSuppression(cmdName); suppressErr != nil {
@@ -81,6 +100,50 @@ func ResolveFirstRun(cmdName string, hasTemplate bool, debug bool) (*config.Conf
 	default:
 		return nil, nil
 	}
+}
+
+// editAndValidate opens the editor on the template, validates the result,
+// and re-opens the editor if validation fails. Returns the loaded config
+// or nil if the user chooses to skip.
+func editAndValidate(path string) (*config.Config, error) {
+	for {
+		if err := openEditor(path); err != nil {
+			return nil, err
+		}
+		cfg, loadErr := config.Load(path)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "[greywall] Template has errors: %v\n", loadErr)
+			fmt.Fprintf(os.Stderr, "[greywall] [e] Edit again   [x] Use original profile\n")
+			fmt.Fprintf(os.Stderr, "> ")
+			scanner := bufio.NewScanner(os.Stdin)
+			if !scanner.Scan() {
+				return nil, nil
+			}
+			answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+			if answer == "e" || answer == "" {
+				continue
+			}
+			return nil, nil
+		}
+		return cfg, nil
+	}
+}
+
+// openEditor opens the user's preferred editor on the given file path.
+// It waits for the editor to exit before returning.
+func openEditor(path string) error {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	cmd := exec.Command(editor, path) //nolint:gosec // user's own EDITOR - intentional
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // templateFS is the minimal struct used for learned templates on disk.

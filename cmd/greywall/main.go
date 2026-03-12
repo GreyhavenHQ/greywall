@@ -111,7 +111,7 @@ Configuration file format:
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Show version information")
 	rootCmd.Flags().BoolVar(&linuxFeatures, "linux-features", false, "Show available Linux security features and exit")
 	rootCmd.Flags().BoolVar(&learning, "learning", false, "Run in learning mode: trace filesystem access and generate a config template")
-	rootCmd.Flags().StringVar(&templateName, "template", "", "Load a specific learned template by name (see: greywall templates list)")
+	rootCmd.Flags().StringVar(&templateName, "template", "", "Load templates by name, comma-separated (e.g. --template claude,uv)")
 
 	rootCmd.Flags().SetInterspersed(true)
 
@@ -196,20 +196,27 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// Extract command name for learned template lookup
 	cmdName := extractCommandName(args, cmdString)
 
-	// Load learned template (when NOT in learning mode)
+	// Load templates (when NOT in learning mode)
 	if !learning {
-		// Determine which template to load: --template flag takes priority
-		var templatePath string
-		var templateLabel string
 		if templateName != "" {
-			templatePath = sandbox.LearnedTemplatePath(templateName)
-			templateLabel = templateName
+			// Explicit --template flag: resolve each comma-separated name
+			names := strings.Split(templateName, ",")
+			for _, name := range names {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				resolved, err := resolveTemplate(name, debug)
+				if err != nil {
+					return err
+				}
+				if resolved != nil {
+					cfg = config.Merge(cfg, resolved)
+				}
+			}
 		} else if cmdName != "" {
-			templatePath = sandbox.LearnedTemplatePath(cmdName)
-			templateLabel = cmdName
-		}
-
-		if templatePath != "" {
+			// Auto-detect by command name
+			templatePath := sandbox.LearnedTemplatePath(cmdName)
 			learnedCfg, loadErr := config.Load(templatePath)
 			switch {
 			case loadErr != nil:
@@ -219,13 +226,10 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			case learnedCfg != nil:
 				cfg = config.Merge(cfg, learnedCfg)
 				if debug {
-					fmt.Fprintf(os.Stderr, "[greywall] Auto-loaded learned template for %q\n", templateLabel)
+					fmt.Fprintf(os.Stderr, "[greywall] Auto-loaded learned template for %q\n", cmdName)
 				}
-			case templateName != "":
-				// Explicit --template but file doesn't exist
-				return fmt.Errorf("learned template %q not found at %s\nRun: greywall templates list", templateName, templatePath)
-			case cmdName != "":
-				// First-run UX: offer built-in profile for known agents
+			default:
+				// No saved template; try first-run UX for known agents
 				profileCfg, profileErr := profiles.ResolveFirstRun(cmdName, false, debug)
 				if profileErr != nil && debug {
 					fmt.Fprintf(os.Stderr, "[greywall] Warning: first-run profile error: %v\n", profileErr)
@@ -418,6 +422,40 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// resolveTemplate resolves a single template name to a config.
+// It tries a saved learned template first, then falls back to a built-in profile.
+// Returns an error if the name can't be resolved at all.
+func resolveTemplate(name string, debug bool) (*config.Config, error) {
+	// Try saved learned template first
+	templatePath := sandbox.LearnedTemplatePath(name)
+	learnedCfg, loadErr := config.Load(templatePath)
+	if loadErr != nil {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to load learned template %q: %v\n", name, loadErr)
+		}
+	}
+	if learnedCfg != nil {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall] Loaded learned template for %q\n", name)
+		}
+		return learnedCfg, nil
+	}
+
+	// Fall back to built-in profile (agent or toolchain)
+	canonical := profiles.IsKnownAgent(name)
+	if canonical != "" {
+		profile := profiles.GetAgentProfile(canonical)
+		if profile != nil {
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall] Using built-in profile for %q\n", name)
+			}
+			return profile, nil
+		}
+	}
+
+	return nil, fmt.Errorf("template %q not found (no learned template and no built-in profile)\nRun: greywall templates list", name)
 }
 
 // extractCommandName extracts a human-readable command name from the arguments.
@@ -682,8 +720,9 @@ Examples:
 				return nil
 			}
 
-			fmt.Println("Show a template: greywall templates show <name>")
-			fmt.Println("Use a template:  greywall --template <name> -- <command>")
+			fmt.Println("Show a template:    greywall templates show <name>")
+			fmt.Println("Use a template:     greywall --template <name> -- <command>")
+			fmt.Println("Combine templates:  greywall --template claude,python -- claude")
 			return nil
 		},
 	}

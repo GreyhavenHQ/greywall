@@ -99,6 +99,40 @@ greywall check
 greywall setup
 ```
 
+### Agent profiles
+
+Greywall ships with built-in profiles for popular AI coding agents (Claude, Codex, Cursor, Aider, Goose, Gemini, OpenCode, Amp, Cline, Copilot, Kilo, Auggie, Droid) and toolchains (Node, Python, Go, Rust, Java, Ruby, Docker).
+
+On first run, greywall shows what the profile allows and lets you apply, edit, or skip:
+
+```bash
+$ greywall -- claude
+
+[greywall] Running claude in a sandbox.
+A built-in profile is available. Without it, only the current directory is accessible.
+
+Allow read:  .claude  .claude.json  .config/claude  .local/share/claude  .gitconfig  ...  + working dir
+Allow write: .claude  .claude.json  .cache/claude  .config/claude  ...  + working dir
+Deny read:   .ssh/id_*  .gnupg/**  .env  .env.*
+Deny write:  .bashrc  .zshrc  .ssh  .gnupg
+
+[Y] Use profile   [e] Edit first   [n] Skip (restrictive)   [never] Don't ask again
+>
+```
+
+Combine agent and toolchain profiles with `--template`:
+
+```bash
+# Agent + Python toolchain (allows access to ~/.cache/uv, ~/.local/pipx, etc.)
+greywall --template claude,python -- claude
+
+# Agent + multiple toolchains
+greywall --template opencode,node,go -- opencode
+
+# List all available profiles and saved templates
+greywall templates list
+```
+
 ### Learning mode
 
 Greywall can trace a command's filesystem access and generate a config template automatically:

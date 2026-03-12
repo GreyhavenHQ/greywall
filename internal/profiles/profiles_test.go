@@ -126,44 +126,69 @@ func TestAvailableAgents(t *testing.T) {
 
 func TestPromptFirstRun(t *testing.T) {
 	var buf bytes.Buffer
+	profile := profiles.GetAgentProfile("claude")
 
 	// Test "Y" (default/enter)
-	resp := profiles.PromptFirstRun("claude", &buf, strings.NewReader("\n"))
+	resp := profiles.PromptFirstRun("claude", profile, &buf, strings.NewReader("\n"))
 	if resp != profiles.PromptYes {
 		t.Errorf("empty input should return PromptYes, got %d", resp)
 	}
 
 	buf.Reset()
-	resp = profiles.PromptFirstRun("claude", &buf, strings.NewReader("y\n"))
+	resp = profiles.PromptFirstRun("claude", profile, &buf, strings.NewReader("y\n"))
 	if resp != profiles.PromptYes {
 		t.Errorf("'y' should return PromptYes, got %d", resp)
 	}
 
+	// Test "e" (edit)
 	buf.Reset()
-	resp = profiles.PromptFirstRun("claude", &buf, strings.NewReader("yes\n"))
-	if resp != profiles.PromptYes {
-		t.Errorf("'yes' should return PromptYes, got %d", resp)
+	resp = profiles.PromptFirstRun("claude", profile, &buf, strings.NewReader("e\n"))
+	if resp != profiles.PromptEdit {
+		t.Errorf("'e' should return PromptEdit, got %d", resp)
 	}
 
-	// Test "n"
+	// Test "s" (skip)
 	buf.Reset()
-	resp = profiles.PromptFirstRun("claude", &buf, strings.NewReader("n\n"))
+	resp = profiles.PromptFirstRun("claude", profile, &buf, strings.NewReader("s\n"))
 	if resp != profiles.PromptNo {
-		t.Errorf("'n' should return PromptNo, got %d", resp)
+		t.Errorf("'s' should return PromptNo, got %d", resp)
 	}
 
-	// Test "never"
+	// Test "n" (don't ask again)
 	buf.Reset()
-	resp = profiles.PromptFirstRun("claude", &buf, strings.NewReader("never\n"))
+	resp = profiles.PromptFirstRun("claude", profile, &buf, strings.NewReader("n\n"))
 	if resp != profiles.PromptNever {
-		t.Errorf("'never' should return PromptNever, got %d", resp)
+		t.Errorf("'n' should return PromptNever, got %d", resp)
 	}
 
 	// Test EOF (no input)
 	buf.Reset()
-	resp = profiles.PromptFirstRun("claude", &buf, strings.NewReader(""))
+	resp = profiles.PromptFirstRun("claude", profile, &buf, strings.NewReader(""))
 	if resp != profiles.PromptNo {
 		t.Errorf("EOF should return PromptNo, got %d", resp)
+	}
+
+	// Verify the output shows profile details
+	buf.Reset()
+	profiles.PromptFirstRun("claude", profile, &buf, strings.NewReader("n\n"))
+	output := buf.String()
+	if !strings.Contains(output, "Running") {
+		t.Error("prompt output should explain that the command is being sandboxed")
+	}
+	if !strings.Contains(output, "built-in profile") {
+		t.Error("prompt output should mention the built-in profile")
+	}
+	if !strings.Contains(output, "Allow read:") {
+		t.Error("prompt output should show Allow read paths")
+	}
+	if !strings.Contains(output, "Deny read:") {
+		t.Error("prompt output should show Deny read paths")
+	}
+	if !strings.Contains(output, "[e]") {
+		t.Error("prompt output should show edit option")
+	}
+	if !strings.Contains(output, "(restrictive)") {
+		t.Error("prompt output should clarify that skipping is restrictive")
 	}
 }
 
