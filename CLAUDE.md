@@ -1,6 +1,6 @@
 # Greywall
 
-Deny-by-default command sandbox. Wraps commands with restricted filesystem access (current directory only by default) and transparent network redirection through [greyproxy](https://github.com/GreyhavenHQ/greyproxy). Supports `--learning` mode to trace filesystem access and auto-generate config templates. Linux only (bubblewrap + seccomp/Landlock/eBPF); macOS support coming.
+Deny-by-default command sandbox. Wraps commands with restricted filesystem access (current directory only by default) and transparent network redirection through [greyproxy](https://github.com/GreyhavenHQ/greyproxy). Supports `--learning` mode to trace filesystem access and auto-generate config templates. Linux (bubblewrap + seccomp/Landlock/eBPF) and macOS (sandbox-exec Seatbelt profiles).
 
 ## Build & Run
 
