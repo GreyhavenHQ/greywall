@@ -13,7 +13,7 @@ import (
 // self-contained file.
 type AgentDef struct {
 	// Names lists every command-line name that should resolve to this profile.
-	// The first entry is the canonical name used for display and templates.
+	// The first entry is the canonical name used for display and profiles.
 	Names []string
 
 	// Toolchain marks this as a toolchain profile (npm, uv, cargo, etc.)

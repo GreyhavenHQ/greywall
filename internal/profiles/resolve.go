@@ -21,7 +21,7 @@ import (
 // The prompt is skipped when:
 //   - cmdName is empty or an ad-hoc command (ls, curl, etc.)
 //   - cmdName is not a known agent
-//   - A learned template already exists for the command
+//   - A saved profile already exists for the command
 //   - The user previously chose "never" for this command
 //   - stdin is not a terminal (pipe/CI)
 func ResolveFirstRun(cmdName string, hasTemplate bool, debug bool) (*config.Config, error) {
@@ -36,7 +36,7 @@ func ResolveFirstRun(cmdName string, hasTemplate bool, debug bool) (*config.Conf
 	canonical := IsKnownAgent(cmdName)
 	if canonical == "" {
 		if debug {
-			fmt.Fprintf(os.Stderr, "[greywall] No learned template for %q. Run with --learning to create one.\n", cmdName)
+			fmt.Fprintf(os.Stderr, "[greywall] No saved profile for %q. Run with --learning to create one.\n", cmdName)
 		}
 		return nil, nil
 	}
@@ -72,7 +72,7 @@ func ResolveFirstRun(cmdName string, hasTemplate bool, debug bool) (*config.Conf
 	switch response {
 	case PromptYes:
 		if saveErr := SaveAsTemplate(profile, cmdName, debug); saveErr != nil {
-			fmt.Fprintf(os.Stderr, "[greywall] Warning: could not save profile as template: %v\n", saveErr)
+			fmt.Fprintf(os.Stderr, "[greywall] Warning: could not save profile: %v\n", saveErr)
 		}
 		return profile, nil
 
@@ -103,7 +103,7 @@ func ResolveFirstRun(cmdName string, hasTemplate bool, debug bool) (*config.Conf
 	}
 }
 
-// editAndValidate opens the editor on the template, validates the result,
+// editAndValidate opens the editor on the profile, validates the result,
 // and re-opens the editor if validation fails. Returns the loaded config
 // or nil if the user chooses to skip.
 func editAndValidate(path string) (*config.Config, error) {
@@ -113,7 +113,7 @@ func editAndValidate(path string) (*config.Config, error) {
 		}
 		cfg, loadErr := config.Load(path)
 		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "[greywall] Template has errors: %v\n", loadErr)
+			fmt.Fprintf(os.Stderr, "[greywall] Profile has errors: %v\n", loadErr)
 			fmt.Fprintf(os.Stderr, "[greywall] [e] Edit again   [x] Use original profile\n")
 			fmt.Fprintf(os.Stderr, "> ")
 			scanner := bufio.NewScanner(os.Stdin)
@@ -147,25 +147,25 @@ func openEditor(path string) error {
 	return cmd.Run()
 }
 
-// templateFS is the minimal struct used for learned templates on disk.
+// profileFS is the minimal struct used for saved profiles on disk.
 // Only filesystem fields are persisted, matching the format used by --learning.
-type templateFS struct {
+type profileFS struct {
 	AllowRead  []string `json:"allowRead,omitempty"`
 	AllowWrite []string `json:"allowWrite"`
 	DenyWrite  []string `json:"denyWrite"`
 	DenyRead   []string `json:"denyRead"`
 }
 
-type templateConfig struct {
-	Filesystem templateFS `json:"filesystem"`
+type profileConfig struct {
+	Filesystem profileFS `json:"filesystem"`
 }
 
-// SaveAsTemplate serializes a profile config as a learned template so it
-// auto-loads on subsequent runs without prompting. Only filesystem paths
-// are persisted, matching the format produced by --learning.
+// SaveAsTemplate serializes a profile config to disk so it auto-loads on
+// subsequent runs without prompting. Only filesystem paths are persisted,
+// matching the format produced by --learning.
 func SaveAsTemplate(cfg *config.Config, cmdName string, debug bool) error {
-	tmpl := templateConfig{
-		Filesystem: templateFS{
+	p := profileConfig{
+		Filesystem: profileFS{
 			AllowRead:  nonNil(cfg.Filesystem.AllowRead),
 			AllowWrite: nonNil(cfg.Filesystem.AllowWrite),
 			DenyWrite:  nonNil(cfg.Filesystem.DenyWrite),
@@ -173,11 +173,11 @@ func SaveAsTemplate(cfg *config.Config, cmdName string, debug bool) error {
 		},
 	}
 
-	templatePath := sandbox.LearnedTemplatePath(cmdName)
-	if err := os.MkdirAll(filepath.Dir(templatePath), 0o750); err != nil {
+	savePath := sandbox.LearnedTemplatePath(cmdName)
+	if err := os.MkdirAll(filepath.Dir(savePath), 0o750); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(tmpl, "", "  ")
+	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -188,13 +188,13 @@ func SaveAsTemplate(cfg *config.Config, cmdName string, debug bool) error {
 	content = append(content, data...)
 	content = append(content, '\n')
 
-	if err := os.WriteFile(templatePath, content, 0o600); err != nil {
+	if err := os.WriteFile(savePath, content, 0o600); err != nil {
 		return err
 	}
 	if debug {
-		fmt.Fprintf(os.Stderr, "[greywall] Saved profile as template: %s\n", templatePath)
+		fmt.Fprintf(os.Stderr, "[greywall] Saved profile: %s\n", savePath)
 	}
-	fmt.Fprintf(os.Stderr, "[greywall] Profile saved. Edit with: greywall templates show %s\n", cmdName)
+	fmt.Fprintf(os.Stderr, "[greywall] Profile saved. Edit with: greywall profiles show %s\n", cmdName)
 	return nil
 }
 
@@ -207,7 +207,7 @@ func nonNil(s []string) []string {
 }
 
 // ListAvailableProfiles returns a sorted list of built-in agent profiles
-// that do not yet have a saved learned template.
+// that do not yet have a saved profile.
 func ListAvailableProfiles() []string {
 	saved := make(map[string]bool)
 	templates, _ := sandbox.ListLearnedTemplates()

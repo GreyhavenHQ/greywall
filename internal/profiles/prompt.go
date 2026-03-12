@@ -17,7 +17,7 @@ type PromptResponse int
 
 const (
 	PromptYes   PromptResponse = iota // Use profile
-	PromptEdit                        // Save template, open editor, then load
+	PromptEdit                        // Save profile, open editor, then load
 	PromptNo                          // Skip, use restrictive defaults
 	PromptNever                       // Suppress future prompts for this command
 )

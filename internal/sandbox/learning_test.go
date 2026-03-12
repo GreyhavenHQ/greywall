@@ -370,8 +370,8 @@ func TestBuildTemplate(t *testing.T) {
 	result := buildTemplate("opencode", allowRead, allowWrite)
 
 	// Check header comments
-	if !strings.Contains(result, `Learned template for "opencode"`) {
-		t.Error("template missing header comment with command name")
+	if !strings.Contains(result, `Learned profile for "opencode"`) {
+		t.Error("profile missing header comment with command name")
 	}
 	if !strings.Contains(result, "greywall --learning -- opencode") {
 		t.Error("template missing generation command")

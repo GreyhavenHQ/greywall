@@ -1,6 +1,6 @@
 # Greywall
 
-Greywall wraps commands in a deny-by-default sandbox. Filesystem access is restricted to the current directory by default. Use `--learning` to trace what else a command needs and auto-generate a config template. All network traffic is transparently redirected through [greyproxy](https://github.com/GreyhavenHQ/greyproxy), a deny-by-default transparent proxy with a live allow/deny dashboard. Run `greywall setup` to install greyproxy automatically.
+Greywall wraps commands in a deny-by-default sandbox. Filesystem access is restricted to the current directory by default. Use `--learning` to trace what else a command needs and auto-generate a config profile. All network traffic is transparently redirected through [greyproxy](https://github.com/GreyhavenHQ/greyproxy), a deny-by-default transparent proxy with a live allow/deny dashboard. Run `greywall setup` to install greyproxy automatically.
 
 *Supports Linux and macOS. See [platform support](docs/platform-support.md) for details.*
 
@@ -13,7 +13,7 @@ greywall check
 # Sandbox a command (network + filesystem denied by default)
 greywall -- curl https://example.com
 
-# Learn what filesystem access a command needs, then auto-generate a template
+# Learn what filesystem access a command needs, then auto-generate a profile
 greywall --learning -- opencode
 
 # Block dangerous commands
@@ -120,34 +120,34 @@ Deny write:  ~/.bashrc  ~/.zshrc  ~/.ssh  ~/.gnupg
 >
 ```
 
-Combine agent and toolchain profiles with `--template`:
+Combine agent and toolchain profiles with `--profile`:
 
 ```bash
 # Agent + Python toolchain (allows access to ~/.cache/uv, ~/.local/pipx, etc.)
-greywall --template claude,python -- claude
+greywall --profile claude,python -- claude
 
 # Agent + multiple toolchains
-greywall --template opencode,node,go -- opencode
+greywall --profile opencode,node,go -- opencode
 
-# List all available profiles and saved templates
-greywall templates list
+# List all available and saved profiles
+greywall profiles list
 ```
 
 ### Learning mode
 
-Greywall can trace a command's filesystem access and generate a config template automatically:
+Greywall can trace a command's filesystem access and generate a config profile automatically:
 
 ```bash
 # Run in learning mode - traces file access via strace
 greywall --learning -- opencode
 
-# List generated templates
-greywall templates list
+# List generated profiles
+greywall profiles list
 
-# Show a template's content
-greywall templates show opencode
+# Show a profile's content
+greywall profiles show opencode
 
-# Next run auto-loads the learned template
+# Next run auto-loads the learned profile
 greywall -- opencode
 ```
 

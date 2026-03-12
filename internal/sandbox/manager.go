@@ -49,7 +49,7 @@ func (m *Manager) SetLearning(enabled bool) {
 	m.learning = enabled
 }
 
-// SetCommandName sets the command name for learning mode template generation.
+// SetCommandName sets the command name for learning mode profile generation.
 func (m *Manager) SetCommandName(name string) {
 	m.commandName = name
 }
@@ -250,7 +250,7 @@ func (m *Manager) wrapCommandLearning(command string) (string, error) {
 	})
 }
 
-// GenerateLearnedTemplate generates a config template from the trace log collected during learning.
+// GenerateLearnedTemplate generates a config profile from the trace log collected during learning.
 // Platform-specific implementation in manager_linux.go / manager_darwin.go.
 func (m *Manager) GenerateLearnedTemplate(cmdName string) (string, error) {
 	return m.generateLearnedTemplatePlatform(cmdName)

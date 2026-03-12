@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// generateLearnedTemplatePlatform parses the strace log and generates a template (Linux).
+// generateLearnedTemplatePlatform parses the strace log and generates a profile (Linux).
 func (m *Manager) generateLearnedTemplatePlatform(cmdName string) (string, error) {
 	if m.straceLogPath == "" {
 		return "", fmt.Errorf("no strace log available (was learning mode enabled?)")

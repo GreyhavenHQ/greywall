@@ -9,7 +9,7 @@ import (
 
 // generateLearnedTemplatePlatform stops eslogger,
 // parses the eslogger log with PID-based process tree filtering,
-// and generates a template (macOS).
+// and generates a profile (macOS).
 func (m *Manager) generateLearnedTemplatePlatform(cmdName string) (string, error) {
 	if m.esloggerLogPath == "" {
 		return "", fmt.Errorf("no eslogger log available (was learning mode enabled?)")
