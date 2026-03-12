@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
-
-	"golang.org/x/sys/unix"
 )
 
 // PromptResponse represents the user's answer to the first-run prompt.
@@ -39,15 +37,10 @@ type colorizer struct {
 	color bool
 }
 
-// fdWriter is implemented by *os.File and anything else with a file descriptor.
-type fdWriter interface {
-	Fd() uintptr
-}
-
 func newColorizer(w io.Writer) colorizer {
 	useColor := false
-	if f, ok := w.(fdWriter); ok {
-		useColor = isTerminal(int(f.Fd())) //nolint:gosec // file descriptors are small ints, no overflow risk
+	if f, ok := w.(*os.File); ok {
+		useColor = isTerminal(f)
 	}
 	// Respect NO_COLOR convention
 	if os.Getenv("NO_COLOR") != "" {
@@ -69,15 +62,18 @@ func (c colorizer) red(text string) string   { return c.styled(ansiRed, text) }
 func (c colorizer) cyan(text string) string  { return c.styled(ansiCyan, text) }
 func (c colorizer) dim(text string) string   { return c.styled(ansiDim, text) }
 
-// isTerminal returns true if the given file descriptor is a terminal.
-func isTerminal(fd int) bool {
-	_, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	return err == nil
+// isTerminal returns true if the given file is a terminal.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // IsInteractive returns true if stdin is a terminal (not a pipe or redirection).
 func IsInteractive() bool {
-	return isTerminal(int(os.Stdin.Fd())) //nolint:gosec // file descriptors are small ints, no overflow risk
+	return isTerminal(os.Stdin)
 }
 
 // formatPaths returns a display string for a list of paths.
