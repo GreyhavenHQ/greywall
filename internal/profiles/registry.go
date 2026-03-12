@@ -7,17 +7,22 @@ import (
 	"github.com/GreyhavenHQ/greywall/internal/config"
 )
 
-// AgentDef is everything needed to define a known agent profile.
-// Each agent file in the agents/ subpackage creates one of these and
-// passes it to Register() via an init() function, so adding a new agent
-// is a single self-contained file.
+// AgentDef is everything needed to define a known agent or toolchain profile.
+// Each file in the agents/ subpackage creates one of these and passes it to
+// Register() via an init() function, so adding a new entry is a single
+// self-contained file.
 type AgentDef struct {
-	// Names lists every command-line name that should resolve to this agent.
+	// Names lists every command-line name that should resolve to this profile.
 	// The first entry is the canonical name used for display and templates.
 	Names []string
 
-	// Overlay returns the agent-specific config that gets merged on top of
-	// BaseProfile(). Only filesystem paths should be set here.
+	// Toolchain marks this as a toolchain profile (npm, uv, cargo, etc.)
+	// rather than an AI agent. Toolchain profiles are not merged with
+	// BaseProfile(); they only provide their own filesystem paths.
+	Toolchain bool
+
+	// Overlay returns the profile-specific config. For agents this is merged
+	// on top of BaseProfile(); for toolchains it is used as-is.
 	Overlay func() *config.Config
 }
 
@@ -42,15 +47,31 @@ func IsKnownAgent(cmd string) string {
 	return ""
 }
 
-// GetAgentProfile returns the merged base + agent overlay for a canonical name.
-// Returns nil if the agent is not registered.
+// GetAgentProfile returns the profile for a canonical name.
+// For agents, the overlay is merged on top of BaseProfile().
+// For toolchains, the overlay is returned as-is.
+// Returns nil if not registered.
 func GetAgentProfile(canonical string) *config.Config {
 	for _, def := range registry {
 		if def.Names[0] == canonical {
-			return config.Merge(BaseProfile(), def.Overlay())
+			overlay := def.Overlay()
+			if def.Toolchain {
+				return overlay
+			}
+			return config.Merge(BaseProfile(), overlay)
 		}
 	}
 	return nil
+}
+
+// IsToolchain returns true if the canonical name is a toolchain profile.
+func IsToolchain(canonical string) bool {
+	for _, def := range registry {
+		if def.Names[0] == canonical {
+			return def.Toolchain
+		}
+	}
+	return false
 }
 
 // AvailableAgents returns a sorted list of canonical agent names.
@@ -63,29 +84,34 @@ func AvailableAgents() []string {
 	return agents
 }
 
-// AdHocCommands is the set of common unix commands that should not trigger
-// the first-run agent profile prompt.
+// AdHocCommands is the set of basic unix utilities that should not trigger
+// the first-run profile prompt. These are simple commands that don't need
+// their own config/cache directories. Toolchain commands (npm, uv, cargo,
+// etc.) are NOT here; they have their own profiles under agents/.
 var AdHocCommands = map[string]bool{
+	// Text processing
 	"ls": true, "cat": true, "grep": true, "rg": true, "find": true,
 	"head": true, "tail": true, "wc": true, "sort": true, "uniq": true,
 	"sed": true, "awk": true, "cut": true, "tr": true, "tee": true,
-	"echo": true, "printf": true, "env": true, "printenv": true,
-	"curl": true, "wget": true, "ssh": true, "scp": true, "rsync": true,
-	"git": true, "gh": true, "glab": true, "svn": true, "hg": true,
-	"make": true, "cmake": true, "ninja": true, "just": true,
-	"npm": true, "npx": true, "yarn": true, "pnpm": true, "bun": true, "deno": true, "node": true,
-	"python": true, "python3": true, "pip": true, "pip3": true, "uv": true, "pipx": true,
-	"go": true, "cargo": true, "rustc": true, "rustup": true,
-	"docker": true, "podman": true, "kubectl": true, "helm": true,
-	"terraform": true, "pulumi": true,
-	"java": true, "javac": true, "mvn": true, "gradle": true,
-	"ruby": true, "gem": true, "bundle": true,
-	"bash": true, "zsh": true, "sh": true, "fish": true,
-	"vim": true, "nvim": true, "nano": true, "emacs": true,
 	"less": true, "more": true, "bat": true,
-	"tar": true, "zip": true, "unzip": true, "gzip": true,
+	// Output
+	"echo": true, "printf": true, "env": true, "printenv": true,
+	// File operations
 	"cp": true, "mv": true, "rm": true, "mkdir": true, "rmdir": true, "touch": true,
 	"chmod": true, "chown": true, "ln": true,
+	// Archives
+	"tar": true, "zip": true, "unzip": true, "gzip": true,
+	// Network utilities
+	"curl": true, "wget": true, "ssh": true, "scp": true, "rsync": true,
+	// VCS
+	"git": true, "svn": true, "hg": true,
+	// Build
+	"make": true, "cmake": true, "ninja": true, "just": true,
+	// Shells
+	"bash": true, "zsh": true, "sh": true, "fish": true,
+	// Editors
+	"vim": true, "nvim": true, "nano": true, "emacs": true,
+	// System info
 	"ps": true, "top": true, "htop": true, "kill": true,
 	"man": true, "which": true, "whereis": true, "whoami": true,
 	"date": true, "cal": true, "df": true, "du": true, "free": true,

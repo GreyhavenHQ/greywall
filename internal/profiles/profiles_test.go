@@ -9,7 +9,8 @@ import (
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
 	"github.com/GreyhavenHQ/greywall/internal/profiles"
-	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents" // register all agents
+	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents"      // register all agents
+	_ "github.com/GreyhavenHQ/greywall/internal/profiles/toolchains" // register all toolchains
 )
 
 func TestIsKnownAgent(t *testing.T) {
@@ -40,7 +41,10 @@ func TestIsAdHocCommand(t *testing.T) {
 		{"ls", true},
 		{"curl", true},
 		{"git", true},
-		{"npm", true},
+		{"make", true},
+		{"npm", false},   // toolchain, not ad-hoc
+		{"uv", false},    // toolchain, not ad-hoc
+		{"cargo", false}, // toolchain, not ad-hoc
 		{"claude", false},
 		{"my-custom-tool", false},
 	}
@@ -71,22 +75,32 @@ func TestBaseProfile(t *testing.T) {
 }
 
 func TestGetAgentProfile(t *testing.T) {
-	for _, agent := range profiles.AvailableAgents() {
-		profile := profiles.GetAgentProfile(agent)
+	for _, name := range profiles.AvailableAgents() {
+		profile := profiles.GetAgentProfile(name)
 		if profile == nil {
-			t.Errorf("GetAgentProfile(%q) returned nil", agent)
+			t.Errorf("GetAgentProfile(%q) returned nil", name)
 			continue
 		}
-		// Agent profiles should have base paths merged in
-		hasGitConfig := false
-		for _, p := range profile.Filesystem.AllowRead {
-			if p == "~/.gitconfig" {
-				hasGitConfig = true
-				break
+
+		if profiles.IsToolchain(name) {
+			// Toolchain profiles should NOT have base paths
+			for _, p := range profile.Filesystem.AllowRead {
+				if p == "~/.gitconfig" {
+					t.Errorf("toolchain %q should not have base path ~/.gitconfig", name)
+				}
 			}
-		}
-		if !hasGitConfig {
-			t.Errorf("GetAgentProfile(%q) missing base path ~/.gitconfig in AllowRead", agent)
+		} else {
+			// Agent profiles should have base paths merged in
+			hasGitConfig := false
+			for _, p := range profile.Filesystem.AllowRead {
+				if p == "~/.gitconfig" {
+					hasGitConfig = true
+					break
+				}
+			}
+			if !hasGitConfig {
+				t.Errorf("GetAgentProfile(%q) missing base path ~/.gitconfig in AllowRead", name)
+			}
 		}
 	}
 

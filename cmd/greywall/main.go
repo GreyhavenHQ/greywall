@@ -16,7 +16,8 @@ import (
 	"github.com/GreyhavenHQ/greywall/internal/config"
 	"github.com/GreyhavenHQ/greywall/internal/platform"
 	"github.com/GreyhavenHQ/greywall/internal/profiles"
-	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents" // register built-in agent profiles
+	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents"      // register built-in agent profiles
+	_ "github.com/GreyhavenHQ/greywall/internal/profiles/toolchains" // register built-in toolchain profiles
 	"github.com/GreyhavenHQ/greywall/internal/proxy"
 	"github.com/GreyhavenHQ/greywall/internal/sandbox"
 	"github.com/spf13/cobra"
