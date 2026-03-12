@@ -152,6 +152,25 @@ func ApplyLandlockFromConfig(cfg *config.Config, cwd string, socketPaths []strin
 		}
 	}
 
+	// User-configured allowRead paths
+	if cfg != nil && cfg.Filesystem.AllowRead != nil {
+		expandedPaths := ExpandGlobPatterns(cfg.Filesystem.AllowRead)
+		for _, p := range expandedPaths {
+			if err := ruleset.AllowRead(p); err != nil && debug {
+				fmt.Fprintf(os.Stderr, "[greywall:landlock] Warning: failed to add read path %s: %v\n", p, err)
+			}
+		}
+		// Also add non-glob paths directly
+		for _, p := range cfg.Filesystem.AllowRead {
+			if !ContainsGlobChars(p) {
+				normalized := NormalizePath(p)
+				if err := ruleset.AllowRead(normalized); err != nil && debug {
+					fmt.Fprintf(os.Stderr, "[greywall:landlock] Warning: failed to add read path %s: %v\n", normalized, err)
+				}
+			}
+		}
+	}
+
 	// User-configured allowWrite paths
 	if cfg != nil && cfg.Filesystem.AllowWrite != nil {
 		expandedPaths := ExpandGlobPatterns(cfg.Filesystem.AllowWrite)
