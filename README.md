@@ -111,12 +111,12 @@ $ greywall -- claude
 [greywall] Running claude in a sandbox.
 A built-in profile is available. Without it, only the current directory is accessible.
 
-Allow read:  .claude  .claude.json  .config/claude  .local/share/claude  .gitconfig  ...  + working dir
-Allow write: .claude  .claude.json  .cache/claude  .config/claude  ...  + working dir
-Deny read:   .ssh/id_*  .gnupg/**  .env  .env.*
-Deny write:  .bashrc  .zshrc  .ssh  .gnupg
+Allow read:  ~/.claude  ~/.claude.json  ~/.config/claude  ~/.local/share/claude  ~/.gitconfig  ...  + working dir
+Allow write: ~/.claude  ~/.claude.json  ~/.cache/claude  ~/.config/claude  ...  + working dir
+Deny read:   ~/.ssh/id_*  ~/.gnupg/**  .env  .env.*
+Deny write:  ~/.bashrc  ~/.zshrc  ~/.ssh  ~/.gnupg
 
-[Y] Use profile   [e] Edit first   [n] Skip (restrictive)   [never] Don't ask again
+[Y] Use profile (recommended)   [e] Edit first   [s] Skip (restrictive)   [n] Don't ask again
 >
 ```
 
