@@ -58,6 +58,7 @@ func ResolveFirstRun(cmdName string, hasTemplate bool, debug bool) (*config.Conf
 	}
 
 	if !IsInteractive() {
+		fmt.Fprintf(os.Stderr, "[greywall] A built-in profile for %q is available. Use --auto-profile to apply it.\n", cmdName)
 		return nil, nil
 	}
 

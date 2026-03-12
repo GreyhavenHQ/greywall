@@ -39,11 +39,12 @@ var (
 	dnsAddr       string
 	cmdString     string
 	exposePorts   []string
-	exitCode      int
-	showVersion   bool
+	exitCode    int
+	showVersion bool
 	linuxFeatures bool
-	learning      bool
-	templateName  string
+	learning    bool
+	templateName string
+	autoProfile bool
 )
 
 func main() {
@@ -112,6 +113,7 @@ Configuration file format:
 	rootCmd.Flags().BoolVar(&linuxFeatures, "linux-features", false, "Show available Linux security features and exit")
 	rootCmd.Flags().BoolVar(&learning, "learning", false, "Run in learning mode: trace filesystem access and generate a config template")
 	rootCmd.Flags().StringVar(&templateName, "template", "", "Load templates by name, comma-separated (e.g. --template claude,uv)")
+	rootCmd.Flags().BoolVar(&autoProfile, "auto-profile", false, "Use saved template or built-in profile without prompting")
 
 	rootCmd.Flags().SetInterspersed(true)
 
@@ -227,6 +229,20 @@ func runCommand(cmd *cobra.Command, args []string) error {
 				cfg = config.Merge(cfg, learnedCfg)
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall] Auto-loaded learned template for %q\n", cmdName)
+				}
+			case autoProfile:
+				// --auto-profile: silently apply built-in profile if available
+				canonical := profiles.IsKnownAgent(cmdName)
+				if canonical != "" {
+					if profile := profiles.GetAgentProfile(canonical); profile != nil {
+						if saveErr := profiles.SaveAsTemplate(profile, cmdName, debug); saveErr != nil && debug {
+							fmt.Fprintf(os.Stderr, "[greywall] Warning: could not save profile: %v\n", saveErr)
+						}
+						cfg = config.Merge(cfg, profile)
+						if debug {
+							fmt.Fprintf(os.Stderr, "[greywall] Auto-applied built-in profile for %q\n", cmdName)
+						}
+					}
 				}
 			default:
 				// No saved template; try first-run UX for known agents
