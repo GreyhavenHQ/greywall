@@ -44,14 +44,14 @@ func LoadPreferences() (*Preferences, error) {
 // SavePreferences writes the preferences file to disk.
 func SavePreferences(prefs *Preferences) error {
 	path := preferencesPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(prefs, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
 // IsPromptSuppressed returns true if the user chose "never" for this command.

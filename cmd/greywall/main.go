@@ -16,7 +16,7 @@ import (
 	"github.com/GreyhavenHQ/greywall/internal/config"
 	"github.com/GreyhavenHQ/greywall/internal/platform"
 	"github.com/GreyhavenHQ/greywall/internal/profiles"
-	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents"      // register built-in agent profiles
+	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents"     // register built-in agent profiles
 	_ "github.com/GreyhavenHQ/greywall/internal/profiles/toolchains" // register built-in toolchain profiles
 	"github.com/GreyhavenHQ/greywall/internal/proxy"
 	"github.com/GreyhavenHQ/greywall/internal/sandbox"
@@ -39,12 +39,12 @@ var (
 	dnsAddr       string
 	cmdString     string
 	exposePorts   []string
-	exitCode    int
-	showVersion bool
+	exitCode      int
+	showVersion   bool
 	linuxFeatures bool
-	learning    bool
-	profileName string
-	autoProfile bool
+	learning      bool
+	profileName   string
+	autoProfile   bool
 )
 
 func main() {

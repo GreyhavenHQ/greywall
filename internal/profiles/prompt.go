@@ -24,13 +24,12 @@ const (
 
 // ANSI color codes.
 const (
-	ansiReset  = "\033[0m"
-	ansiBold   = "\033[1m"
-	ansiDim    = "\033[2m"
-	ansiGreen  = "\033[32m"
-	ansiRed    = "\033[31m"
-	ansiYellow = "\033[33m"
-	ansiCyan   = "\033[36m"
+	ansiReset = "\033[0m"
+	ansiBold  = "\033[1m"
+	ansiDim   = "\033[2m"
+	ansiGreen = "\033[32m"
+	ansiRed   = "\033[31m"
+	ansiCyan  = "\033[36m"
 )
 
 // colorizer wraps an io.Writer with optional ANSI color support.
@@ -48,7 +47,7 @@ type fdWriter interface {
 func newColorizer(w io.Writer) colorizer {
 	useColor := false
 	if f, ok := w.(fdWriter); ok {
-		useColor = isTerminal(int(f.Fd()))
+		useColor = isTerminal(int(f.Fd())) //nolint:gosec // file descriptors are small ints, no overflow risk
 	}
 	// Respect NO_COLOR convention
 	if os.Getenv("NO_COLOR") != "" {
@@ -64,12 +63,11 @@ func (c colorizer) styled(code, text string) string {
 	return code + text + ansiReset
 }
 
-func (c colorizer) bold(text string) string   { return c.styled(ansiBold, text) }
-func (c colorizer) green(text string) string  { return c.styled(ansiGreen, text) }
-func (c colorizer) red(text string) string    { return c.styled(ansiRed, text) }
-func (c colorizer) yellow(text string) string { return c.styled(ansiYellow, text) }
-func (c colorizer) cyan(text string) string   { return c.styled(ansiCyan, text) }
-func (c colorizer) dim(text string) string    { return c.styled(ansiDim, text) }
+func (c colorizer) bold(text string) string  { return c.styled(ansiBold, text) }
+func (c colorizer) green(text string) string { return c.styled(ansiGreen, text) }
+func (c colorizer) red(text string) string   { return c.styled(ansiRed, text) }
+func (c colorizer) cyan(text string) string  { return c.styled(ansiCyan, text) }
+func (c colorizer) dim(text string) string   { return c.styled(ansiDim, text) }
 
 // isTerminal returns true if the given file descriptor is a terminal.
 func isTerminal(fd int) bool {
@@ -79,7 +77,7 @@ func isTerminal(fd int) bool {
 
 // IsInteractive returns true if stdin is a terminal (not a pipe or redirection).
 func IsInteractive() bool {
-	return isTerminal(int(os.Stdin.Fd()))
+	return isTerminal(int(os.Stdin.Fd())) //nolint:gosec // file descriptors are small ints, no overflow risk
 }
 
 // formatPaths returns a display string for a list of paths.
@@ -110,10 +108,11 @@ func hasWorkingDir(paths []string) bool {
 func PromptFirstRun(agentName string, profile *config.Config, w io.Writer, r io.Reader) PromptResponse {
 	c := newColorizer(w)
 
+	//nolint:errcheck,gosec // terminal UI output, errors are non-actionable
 	fmt.Fprintf(w, "%s Running %s in a sandbox.\n",
 		c.bold("[greywall]"), c.cyan(agentName))
-	fmt.Fprintf(w, "A built-in profile is available. Without it, only the current directory is accessible.\n")
-	fmt.Fprintln(w)
+	fmt.Fprintf(w, "A built-in profile is available. Without it, only the current directory is accessible.\n") //nolint:errcheck
+	fmt.Fprintln(w)                                                                                            //nolint:errcheck
 
 	// Show what the profile grants
 	if len(profile.Filesystem.AllowRead) > 0 {
@@ -121,26 +120,27 @@ func PromptFirstRun(agentName string, profile *config.Config, w io.Writer, r io.
 		if hasWorkingDir(profile.Filesystem.AllowRead) {
 			suffix = c.dim(" + working dir")
 		}
-		fmt.Fprintf(w, "%s  %s%s\n", c.green("Allow read: "), formatPaths(profile.Filesystem.AllowRead), suffix)
+		fmt.Fprintf(w, "%s  %s%s\n", c.green("Allow read: "), formatPaths(profile.Filesystem.AllowRead), suffix) //nolint:errcheck,gosec
 	}
 	if len(profile.Filesystem.AllowWrite) > 0 {
 		suffix := ""
 		if hasWorkingDir(profile.Filesystem.AllowWrite) {
 			suffix = c.dim(" + working dir")
 		}
-		fmt.Fprintf(w, "%s %s%s\n", c.green("Allow write:"), formatPaths(profile.Filesystem.AllowWrite), suffix)
+		fmt.Fprintf(w, "%s %s%s\n", c.green("Allow write:"), formatPaths(profile.Filesystem.AllowWrite), suffix) //nolint:errcheck,gosec
 	}
 	if len(profile.Filesystem.DenyRead) > 0 {
-		fmt.Fprintf(w, "%s   %s\n", c.red("Deny read:"), formatPaths(profile.Filesystem.DenyRead))
+		fmt.Fprintf(w, "%s   %s\n", c.red("Deny read:"), formatPaths(profile.Filesystem.DenyRead)) //nolint:errcheck,gosec
 	}
 	if len(profile.Filesystem.DenyWrite) > 0 {
-		fmt.Fprintf(w, "%s  %s\n", c.red("Deny write:"), formatPaths(profile.Filesystem.DenyWrite))
+		fmt.Fprintf(w, "%s  %s\n", c.red("Deny write:"), formatPaths(profile.Filesystem.DenyWrite)) //nolint:errcheck,gosec
 	}
 
-	fmt.Fprintln(w)
+	fmt.Fprintln(w) //nolint:errcheck
+	//nolint:errcheck,gosec // terminal UI output
 	fmt.Fprintf(w, "%s Use profile %s   %s Edit first   %s Skip %s   %s Don't ask again\n",
 		c.bold("[Y]"), c.dim("(recommended)"), c.bold("[e]"), c.bold("[s]"), c.dim("(restrictive)"), c.bold("[n]"))
-	fmt.Fprintf(w, "%s ", c.bold(">"))
+	fmt.Fprintf(w, "%s ", c.bold(">")) //nolint:errcheck,gosec
 
 	scanner := bufio.NewScanner(r)
 	if !scanner.Scan() {

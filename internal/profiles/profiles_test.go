@@ -9,7 +9,7 @@ import (
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
 	"github.com/GreyhavenHQ/greywall/internal/profiles"
-	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents"      // register all agents
+	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents"     // register all agents
 	_ "github.com/GreyhavenHQ/greywall/internal/profiles/toolchains" // register all toolchains
 )
 
@@ -255,7 +255,7 @@ func TestSaveAsTemplate(t *testing.T) {
 	}
 
 	// Read back and verify format
-	data, err := os.ReadFile(filepath.Join(tmpDir, "greywall", "learned", "claude.json"))
+	data, err := os.ReadFile(filepath.Join(tmpDir, "greywall", "learned", "claude.json")) //nolint:gosec // test file with controlled path
 	if err != nil {
 		t.Fatalf("failed to read saved template: %v", err)
 	}
@@ -300,10 +300,10 @@ func TestListAvailableProfiles(t *testing.T) {
 
 	// Simulate saving a template for claude
 	learnedDir := filepath.Join(tmpDir, "greywall", "learned")
-	if err := os.MkdirAll(learnedDir, 0o755); err != nil {
+	if err := os.MkdirAll(learnedDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(learnedDir, "claude.json"), []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(learnedDir, "claude.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
