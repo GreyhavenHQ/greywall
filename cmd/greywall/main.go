@@ -15,6 +15,8 @@ import (
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
 	"github.com/GreyhavenHQ/greywall/internal/platform"
+	"github.com/GreyhavenHQ/greywall/internal/profiles"
+	_ "github.com/GreyhavenHQ/greywall/internal/profiles/agents" // register built-in agent profiles
 	"github.com/GreyhavenHQ/greywall/internal/proxy"
 	"github.com/GreyhavenHQ/greywall/internal/sandbox"
 	"github.com/spf13/cobra"
@@ -222,9 +224,13 @@ func runCommand(cmd *cobra.Command, args []string) error {
 				// Explicit --template but file doesn't exist
 				return fmt.Errorf("learned template %q not found at %s\nRun: greywall templates list", templateName, templatePath)
 			case cmdName != "":
-				if debug {
-					// No template found for this command - suggest creating one
-					fmt.Fprintf(os.Stderr, "[greywall] No learned template for %q. Run with --learning to create one.\n", cmdName)
+				// First-run UX: offer built-in profile for known agents
+				profileCfg, profileErr := profiles.ResolveFirstRun(cmdName, false, debug)
+				if profileErr != nil && debug {
+					fmt.Fprintf(os.Stderr, "[greywall] Warning: first-run profile error: %v\n", profileErr)
+				}
+				if profileCfg != nil {
+					cfg = config.Merge(cfg, profileCfg)
 				}
 			}
 		}
@@ -651,16 +657,30 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("failed to list templates: %w", err)
 			}
-			if len(templates) == 0 {
-				fmt.Println("No learned templates found.")
+			if len(templates) > 0 {
+				fmt.Printf("Saved templates (%s):\n\n", sandbox.LearnedTemplateDir())
+				for _, t := range templates {
+					fmt.Printf("  %s\n", t.Name)
+				}
+				fmt.Println()
+			}
+
+			available := profiles.ListAvailableProfiles()
+			if len(available) > 0 {
+				fmt.Println("Built-in profiles (not yet saved):")
+				fmt.Println()
+				for _, a := range available {
+					fmt.Printf("  %s\n", a)
+				}
+				fmt.Println()
+			}
+
+			if len(templates) == 0 && len(available) == 0 {
+				fmt.Println("No templates found.")
 				fmt.Printf("Create one with: greywall --learning -- <command>\n")
 				return nil
 			}
-			fmt.Printf("Learned templates (%s):\n\n", sandbox.LearnedTemplateDir())
-			for _, t := range templates {
-				fmt.Printf("  %s\n", t.Name)
-			}
-			fmt.Println()
+
 			fmt.Println("Show a template: greywall templates show <name>")
 			fmt.Println("Use a template:  greywall --template <name> -- <command>")
 			return nil
