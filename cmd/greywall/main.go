@@ -370,7 +370,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	execCmd.Stderr = os.Stderr
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGWINCH, syscall.SIGUSR1, syscall.SIGUSR2)
 
 	// Start the command (non-blocking) so we can get the PID
 	if err := execCmd.Start(); err != nil {
@@ -396,18 +396,20 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	go func() {
-		sigCount := 0
+		termCount := 0
 		for sig := range sigChan {
-			sigCount++
 			if execCmd.Process == nil {
 				continue
 			}
-			// First signal: graceful termination; second signal: force kill
-			if sigCount >= 2 {
-				_ = execCmd.Process.Kill()
-			} else {
-				_ = execCmd.Process.Signal(sig)
+			// For termination signals, force kill on the second attempt
+			if sig == syscall.SIGINT || sig == syscall.SIGTERM {
+				termCount++
+				if termCount >= 2 {
+					_ = execCmd.Process.Kill()
+					continue
+				}
 			}
+			_ = execCmd.Process.Signal(sig)
 		}
 	}()
 

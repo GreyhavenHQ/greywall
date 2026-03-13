@@ -20,6 +20,11 @@ func NewSeccompFilter(debug bool) *SeccompFilter {
 	return &SeccompFilter{debug: debug}
 }
 
+// TIOCSTI is the ioctl command for terminal input injection.
+// Blocking this via seccomp replaces the need for bwrap --new-session,
+// which broke SIGWINCH delivery to interactive/TUI applications.
+const TIOCSTI = 0x5412
+
 // DangerousSyscalls lists syscalls that should be blocked for security.
 var DangerousSyscalls = []string{
 	"ptrace",            // Process debugging/injection
@@ -138,6 +143,50 @@ func (s *SeccompFilter) writeBPFProgram(path string) error {
 		})
 
 		// Return action (block with EPERM)
+		program = append(program, bpfInstruction{
+			code: BPF_RET | BPF_K,
+			k:    uint32(action),
+		})
+	}
+
+	// Block ioctl(fd, TIOCSTI, ...) to prevent terminal input injection.
+	// This replaces bwrap --new-session which broke SIGWINCH for TUI apps.
+	//
+	// seccomp_data layout (all fields are u32 on both x86_64 and aarch64):
+	//   offset 0:  nr (syscall number)
+	//   offset 4:  arch
+	//   offset 8:  instruction_pointer (low 32 bits)
+	//   offset 12: instruction_pointer (high 32 bits)
+	//   offset 16: args[0] (low 32 bits) - fd
+	//   offset 20: args[0] (high 32 bits)
+	//   offset 24: args[1] (low 32 bits) - ioctl command
+	//   offset 28: args[1] (high 32 bits)
+	if ioctlNum, ok := getSyscallNumber("ioctl"); ok {
+		// Reload syscall number (previous jumps may have changed accumulator)
+		program = append(program, bpfInstruction{
+			code: BPF_LD | BPF_W | BPF_ABS,
+			k:    0, // offsetof(seccomp_data, nr)
+		})
+		// if syscall != ioctl, skip 3 instructions (to default allow)
+		program = append(program, bpfInstruction{
+			code: BPF_JMP | BPF_JEQ | BPF_K,
+			jt:   0,                  // match: continue to arg check
+			jf:   3,                  // no match: skip to default allow
+			k:    uint32(ioctlNum),   //nolint:gosec // syscall number fits in uint32
+		})
+		// Load ioctl command argument (args[1], low 32 bits at offset 24)
+		program = append(program, bpfInstruction{
+			code: BPF_LD | BPF_W | BPF_ABS,
+			k:    24, // offsetof(seccomp_data, args[1])
+		})
+		// if ioctl command == TIOCSTI, block it
+		program = append(program, bpfInstruction{
+			code: BPF_JMP | BPF_JEQ | BPF_K,
+			jt:   0,       // match: block
+			jf:   1,       // no match: allow
+			k:    TIOCSTI,
+		})
+		// Block with EPERM
 		program = append(program, bpfInstruction{
 			code: BPF_RET | BPF_K,
 			k:    uint32(action),
@@ -263,6 +312,7 @@ func getSyscallNumber(name string) (int, bool) {
 			"finit_module":      273,
 			"delete_module":     106,
 			// ioperm and iopl don't exist on ARM64
+			"ioctl": 29,
 		}
 	} else {
 		// x86_64 syscall numbers
@@ -294,6 +344,7 @@ func getSyscallNumber(name string) (int, bool) {
 			"delete_module":     176,
 			"ioperm":            173,
 			"iopl":              172,
+			"ioctl":             16,
 		}
 	}
 

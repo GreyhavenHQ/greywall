@@ -626,13 +626,12 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	bwrapArgs := []string{
 		"bwrap",
 	}
-	// --new-session calls setsid() which detaches from the controlling terminal.
-	// Skip it in learning mode so interactive programs (TUIs, prompts) can
-	// read from /dev/tty. Learning mode already relaxes security constraints
-	// (no seccomp, no landlock), so skipping new-session is acceptable.
-	if !opts.Learning {
-		bwrapArgs = append(bwrapArgs, "--new-session")
-	}
+	// NOTE: We intentionally do NOT use --new-session here.
+	// --new-session calls setsid() which detaches from the controlling terminal,
+	// breaking SIGWINCH delivery and making all interactive/TUI apps (Claude Code,
+	// opencode, etc.) unable to respond to terminal resizes.
+	// The TIOCSTI attack vector (terminal input injection) that --new-session
+	// mitigates is instead blocked by our seccomp filter (see linux_seccomp.go).
 	bwrapArgs = append(bwrapArgs, "--die-with-parent")
 
 	// Always use --unshare-net when available (network namespace isolation)
