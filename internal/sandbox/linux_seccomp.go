@@ -170,9 +170,9 @@ func (s *SeccompFilter) writeBPFProgram(path string) error {
 		// if syscall != ioctl, skip 3 instructions (to default allow)
 		program = append(program, bpfInstruction{
 			code: BPF_JMP | BPF_JEQ | BPF_K,
-			jt:   0,                  // match: continue to arg check
-			jf:   3,                  // no match: skip to default allow
-			k:    uint32(ioctlNum),   //nolint:gosec // syscall number fits in uint32
+			jt:   0,                // match: continue to arg check
+			jf:   3,                // no match: skip to default allow
+			k:    uint32(ioctlNum), //nolint:gosec // syscall number fits in uint32
 		})
 		// Load ioctl command argument (args[1], low 32 bits at offset 24)
 		program = append(program, bpfInstruction{
@@ -182,8 +182,8 @@ func (s *SeccompFilter) writeBPFProgram(path string) error {
 		// if ioctl command == TIOCSTI, block it
 		program = append(program, bpfInstruction{
 			code: BPF_JMP | BPF_JEQ | BPF_K,
-			jt:   0,       // match: block
-			jf:   1,       // no match: allow
+			jt:   0, // match: block
+			jf:   1, // no match: allow
 			k:    TIOCSTI,
 		})
 		// Block with EPERM
