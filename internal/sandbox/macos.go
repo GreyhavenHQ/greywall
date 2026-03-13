@@ -578,16 +578,17 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 	if !params.NeedsNetworkRestriction {
 		profile.WriteString("(allow network*)\n")
 	} else {
-		if params.AllowLocalBinding {
-			// Allow binding and inbound connections on localhost (for servers)
-			profile.WriteString(`(allow network-bind (local ip "localhost:*"))
+		// Always allow localhost binding and inbound connections.
+		// This matches Linux behavior where the isolated network namespace
+		// allows unrestricted local binding. Many tools need this for OAuth
+		// callbacks, MCP servers, dev servers, etc.
+		profile.WriteString(`(allow network-bind (local ip "localhost:*"))
 (allow network-inbound (local ip "localhost:*"))
 `)
-			// Process can make outbound connections to localhost
-			if params.AllowLocalOutbound {
-				profile.WriteString(`(allow network-outbound (local ip "localhost:*"))
+		// Process can make outbound connections to localhost
+		if params.AllowLocalOutbound {
+			profile.WriteString(`(allow network-outbound (local ip "localhost:*"))
 `)
-			}
 		}
 
 		if params.AllowAllUnixSockets {
