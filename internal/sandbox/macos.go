@@ -229,19 +229,21 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 			}
 		}
 
-		// Deny sensitive files within CWD (Seatbelt evaluates deny before allow)
+		// Deny sensitive files within CWD.
+		// Must use file-read-data (not file-read*) because Seatbelt ignores
+		// wildcard denies when a specific allow (file-read-data) covers the same path.
 		if cwd != "" {
 			for _, f := range SensitiveProjectFiles {
 				p := filepath.Join(cwd, f)
 				rules = append(rules,
-					"(deny file-read*",
+					"(deny file-read-data",
 					fmt.Sprintf("  (literal %s)", escapePath(p)),
 					fmt.Sprintf("  (with message %q))", logTag),
 				)
 			}
 			// Also deny .env.* pattern via regex
 			rules = append(rules,
-				"(deny file-read*",
+				"(deny file-read-data",
 				fmt.Sprintf("  (regex %s)", escapePath("^"+regexp.QuoteMeta(cwd)+"/\\.env\\..*$")),
 				fmt.Sprintf("  (with message %q))", logTag),
 			)
@@ -252,23 +254,21 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 	}
 
 	// In both modes, deny specific paths (denyRead takes precedence).
-	// Note: We use file-read* (not file-read-data) so denied paths are fully hidden.
-	// In defaultDenyRead mode, this overrides the global file-read-metadata allow,
-	// meaning denied paths can't even be listed or stat'd - more restrictive than
-	// default mode where denied paths are still visible but unreadable.
+	// Must use file-read-data (not file-read*) because Seatbelt ignores
+	// wildcard denies when a specific allow (file-read-data) covers the same path.
 	for _, pathPattern := range denyPaths {
 		normalized := NormalizePath(pathPattern)
 
 		if ContainsGlobChars(normalized) {
 			regex := GlobToRegex(normalized)
 			rules = append(rules,
-				"(deny file-read*",
+				"(deny file-read-data",
 				fmt.Sprintf("  (regex %s)", escapePath(regex)),
 				fmt.Sprintf("  (with message %q))", logTag),
 			)
 		} else {
 			rules = append(rules,
-				"(deny file-read*",
+				"(deny file-read-data",
 				fmt.Sprintf("  (subpath %s)", escapePath(normalized)),
 				fmt.Sprintf("  (with message %q))", logTag),
 			)

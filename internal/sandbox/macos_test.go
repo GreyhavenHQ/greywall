@@ -264,6 +264,108 @@ func TestMacOS_DefaultDenyRead(t *testing.T) {
 	}
 }
 
+// TestMacOS_DenyReadUsesExactOperation verifies that deny read rules use file-read-data
+// (not file-read*) in the generated Seatbelt profile. Seatbelt ignores wildcard denies
+// (file-read*) when a specific allow (file-read-data) covers the same path.
+func TestMacOS_DenyReadUsesExactOperation(t *testing.T) {
+	tests := []struct {
+		name            string
+		defaultDenyRead bool
+		denyRead        []string
+		cwd             string
+	}{
+		{
+			name:            "defaultDenyRead with sensitive project files",
+			defaultDenyRead: true,
+			denyRead:        nil,
+			cwd:             "/home/user/project",
+		},
+		{
+			name:            "defaultDenyRead with user denyRead paths",
+			defaultDenyRead: true,
+			denyRead:        []string{"/home/user/secrets", "/home/user/.ssh/id_*"},
+			cwd:             "/home/user/project",
+		},
+		{
+			name:            "legacy mode with user denyRead paths",
+			defaultDenyRead: false,
+			denyRead:        []string{"/home/user/secrets"},
+			cwd:             "/home/user/project",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := MacOSSandboxParams{
+				Command:         "echo test",
+				DefaultDenyRead: tt.defaultDenyRead,
+				Cwd:             tt.cwd,
+				ReadDenyPaths:   tt.denyRead,
+			}
+
+			profile := GenerateSandboxProfile(params)
+
+			// Must NOT contain "deny file-read*" (wildcard deny is ineffective)
+			if strings.Contains(profile, "(deny file-read*") {
+				t.Errorf("profile must NOT use 'deny file-read*' (wildcard deny is ignored by Seatbelt when a specific allow covers the same path)\nProfile:\n%s", profile)
+			}
+
+			// Must contain "deny file-read-data" for deny rules to work
+			if tt.defaultDenyRead || len(tt.denyRead) > 0 {
+				if !strings.Contains(profile, "(deny file-read-data") {
+					t.Errorf("profile must use 'deny file-read-data' for deny rules to be effective\nProfile:\n%s", profile)
+				}
+			}
+		})
+	}
+}
+
+// TestMacOS_DenyReadSensitiveProjectFiles verifies that the generated profile
+// contains deny rules for all sensitive project files (.env, .env.local, etc.).
+func TestMacOS_DenyReadSensitiveProjectFiles(t *testing.T) {
+	cwd := "/home/user/project"
+	params := MacOSSandboxParams{
+		Command:         "cat .env",
+		DefaultDenyRead: true,
+		Cwd:             cwd,
+	}
+
+	profile := GenerateSandboxProfile(params)
+
+	for _, f := range SensitiveProjectFiles {
+		expected := fmt.Sprintf(`(deny file-read-data
+  (literal %q)`, cwd+"/"+f)
+		if !strings.Contains(profile, expected) {
+			t.Errorf("profile missing deny rule for sensitive file %q\nExpected to contain: %s", f, expected)
+		}
+	}
+
+	// Also check .env.* regex pattern
+	if !strings.Contains(profile, `(deny file-read-data
+  (regex`) {
+		t.Errorf("profile missing regex deny rule for .env.* pattern")
+	}
+}
+
+// TestMacOS_DenyReadUserPaths verifies that user-configured denyRead paths
+// appear in the generated profile with file-read-data (not file-read*).
+func TestMacOS_DenyReadUserPaths(t *testing.T) {
+	params := MacOSSandboxParams{
+		Command:         "echo test",
+		DefaultDenyRead: false,
+		Cwd:             "/home/user/project",
+		ReadDenyPaths:   []string{"/home/user/secrets"},
+	}
+
+	profile := GenerateSandboxProfile(params)
+
+	expected := `(deny file-read-data
+  (subpath "/home/user/secrets")`
+	if !strings.Contains(profile, expected) {
+		t.Errorf("profile missing deny rule for user denyRead path\nExpected: %s\nProfile:\n%s", expected, profile)
+	}
+}
+
 // TestExpandMacOSTmpPaths verifies that /tmp and /private/tmp paths are properly mirrored.
 func TestExpandMacOSTmpPaths(t *testing.T) {
 	tests := []struct {

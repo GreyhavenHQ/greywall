@@ -164,6 +164,87 @@ func TestMacOS_SeatbeltAllowsTmpGreywall(t *testing.T) {
 }
 
 // ============================================================================
+// Sensitive File Read Blocking Tests
+// ============================================================================
+
+// TestMacOS_SeatbeltBlocksEnvFileRead verifies that .env files cannot be read
+// even though the workspace directory has a broad file-read-data allow.
+// This is the regression test for the Seatbelt deny file-read* vs file-read-data bug:
+// Seatbelt ignores wildcard denies (file-read*) when a specific allow (file-read-data)
+// covers the same path. Deny rules must use file-read-data to be effective.
+func TestMacOS_SeatbeltBlocksEnvFileRead(t *testing.T) {
+	skipIfAlreadySandboxed(t)
+
+	workspace := createTempWorkspace(t)
+	createTestFile(t, workspace, ".env", "SECRET_KEY=supersecret")
+	createTestFile(t, workspace, "README.md", "hello")
+
+	cfg := testConfigWithWorkspace(workspace)
+	cfg.Filesystem.DefaultDenyRead = boolPtr(true)
+	cfg.Filesystem.AllowRead = []string{workspace}
+	cfg.Filesystem.DenyRead = []string{filepath.Join(workspace, ".env")}
+
+	// .env should be blocked
+	result := runUnderSandbox(t, cfg, "cat "+filepath.Join(workspace, ".env"), workspace)
+	assertBlocked(t, result)
+
+	// Regular files should still be readable
+	result = runUnderSandbox(t, cfg, "cat "+filepath.Join(workspace, "README.md"), workspace)
+	assertAllowed(t, result)
+	assertContains(t, result.Stdout, "hello")
+}
+
+// TestMacOS_SeatbeltBlocksEnvVariantsRead verifies that .env.* variants are also blocked.
+func TestMacOS_SeatbeltBlocksEnvVariantsRead(t *testing.T) {
+	skipIfAlreadySandboxed(t)
+
+	workspace := createTempWorkspace(t)
+	createTestFile(t, workspace, ".env.local", "LOCAL_SECRET=abc")
+	createTestFile(t, workspace, ".env.production", "PROD_SECRET=xyz")
+
+	cfg := testConfigWithWorkspace(workspace)
+	cfg.Filesystem.DefaultDenyRead = boolPtr(true)
+	cfg.Filesystem.AllowRead = []string{workspace}
+	cfg.Filesystem.DenyRead = []string{
+		filepath.Join(workspace, ".env.local"),
+		filepath.Join(workspace, ".env.production"),
+	}
+
+	result := runUnderSandbox(t, cfg, "cat "+filepath.Join(workspace, ".env.local"), workspace)
+	assertBlocked(t, result)
+
+	result = runUnderSandbox(t, cfg, "cat "+filepath.Join(workspace, ".env.production"), workspace)
+	assertBlocked(t, result)
+}
+
+// TestMacOS_SeatbeltBlocksUserDenyReadPaths verifies that user-configured
+// denyRead paths are blocked even in legacy mode (defaultDenyRead=false).
+func TestMacOS_SeatbeltBlocksUserDenyReadPaths(t *testing.T) {
+	skipIfAlreadySandboxed(t)
+
+	workspace := createTempWorkspace(t)
+	secretDir := filepath.Join(workspace, "secrets")
+	if err := os.MkdirAll(secretDir, 0o750); err != nil {
+		t.Fatalf("failed to create secrets dir: %v", err)
+	}
+	createTestFile(t, workspace, "secrets/api_key.txt", "my-api-key")
+	createTestFile(t, workspace, "public.txt", "public data")
+
+	cfg := testConfigWithWorkspace(workspace)
+	cfg.Filesystem.DefaultDenyRead = boolPtr(false) // legacy mode
+	cfg.Filesystem.DenyRead = []string{secretDir}
+
+	// Secret file should be blocked
+	result := runUnderSandbox(t, cfg, "cat "+filepath.Join(secretDir, "api_key.txt"), workspace)
+	assertBlocked(t, result)
+
+	// Public file should still be readable
+	result = runUnderSandbox(t, cfg, "cat public.txt", workspace)
+	assertAllowed(t, result)
+	assertContains(t, result.Stdout, "public data")
+}
+
+// ============================================================================
 // Network Blocking Tests
 // ============================================================================
 
