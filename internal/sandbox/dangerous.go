@@ -115,6 +115,7 @@ func GetDefaultReadablePaths() []string {
 		"/private/etc",
 		"/private/var/db",
 		"/private/var/run",
+		"/private/var/folders", // Per-user caches (MDS, Security framework, etc.)
 
 		// Linux distributions may have these
 		"/opt",
@@ -136,6 +137,13 @@ func GetDefaultReadablePaths() []string {
 	// Runtimes load libraries, modules, and configs from within these directories.
 	if home != "" {
 		paths = append(paths,
+			// macOS user preferences and keychain (needed for TLS certificate verification)
+			filepath.Join(home, "Library/Preferences"),
+			filepath.Join(home, "Library/Keychains"),
+
+			// Greyproxy CA certificate (needed for MITM TLS verification by non-Keychain apps)
+			filepath.Join(home, "Library/Application Support/greyproxy"),
+
 			// Node.js version managers (need lib/ for global packages)
 			filepath.Join(home, ".nvm"),
 			filepath.Join(home, ".fnm"),
