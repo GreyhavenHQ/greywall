@@ -122,8 +122,8 @@ func greyproxyCACertPath() string {
 			dataHome = filepath.Join(home, ".local", "share", "greyproxy")
 		}
 	}
-	certPath := filepath.Join(dataHome, "ca-cert.pem")
-	if _, err := os.Stat(certPath); err == nil {
+	certPath := filepath.Clean(filepath.Join(dataHome, "ca-cert.pem"))
+	if _, err := os.Stat(certPath); err == nil { //nolint:gosec // path is constructed from trusted sources (home dir + constant)
 		return certPath
 	}
 	return ""
