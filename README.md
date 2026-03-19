@@ -1,17 +1,34 @@
-# Greywall
+# Greywall — Sandbox for AI Coding Agents
 
-Greywall wraps commands in a deny-by-default sandbox. Filesystem access is restricted to the current directory by default. Use `--learning` to trace what else a command needs and auto-generate a config profile. All network traffic is transparently redirected through [greyproxy](https://github.com/GreyhavenHQ/greyproxy), a deny-by-default transparent proxy with a live allow/deny dashboard. Run `greywall setup` to install greyproxy automatically.
+[![GitHub stars](https://img.shields.io/github/stars/GreyhavenHQ/greywall)](https://github.com/GreyhavenHQ/greywall/stargazers)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Go](https://img.shields.io/github/go-mod/go-version/GreyhavenHQ/greywall)](go.mod)
+[![Release](https://img.shields.io/github/v/release/GreyhavenHQ/greywall)](https://github.com/GreyhavenHQ/greywall/releases)
+
+Greywall is a container-free, deny-by-default sandbox for AI agents on Linux and macOS. It restricts filesystem access, network connections, and system calls to only what you explicitly allow, so tools like Claude Code, Cursor, Codex, and other AI coding agents can't access your SSH keys, environment secrets, or anything outside the working directory.
+
+Use `--learning` to trace what a command needs and auto-generate a least-privilege config profile. All network traffic is transparently redirected through [greyproxy](https://github.com/GreyhavenHQ/greyproxy), a deny-by-default transparent proxy with a live allow/deny dashboard.
 
 *Supports Linux and macOS. See [platform support](docs/platform-support.md) for details.*
 
 https://github.com/user-attachments/assets/7d62d45d-a201-4f24-9138-b460e4c157a8
 
-```bash
-# Check that greywall installation is ok
-greywall check
+### Key features
 
+- **Deny-by-default filesystem** — only the working directory is accessible unless you allow more
+- **Network isolation** — all traffic blocked or routed through [greyproxy](https://github.com/GreyhavenHQ/greyproxy) with a live dashboard
+- **Command blocking** — dangerous commands like `rm -rf /` and `git push --force` are denied
+- **Built-in agent profiles** — one-command setup for Claude Code, Cursor, Codex, Aider, Goose, Gemini, OpenCode, Amp, Cline, Copilot, and more
+- **Learning mode** — traces filesystem access and auto-generates least-privilege profiles
+- **Five security layers on Linux** — Bubblewrap namespaces, Landlock, Seccomp BPF, eBPF monitoring, TUN-based network capture
+- **No containers required** — kernel-enforced sandboxing without Docker overhead
+
+```bash
 # Sandbox a command (network + filesystem denied by default)
 greywall -- curl https://example.com
+
+# Sandbox an AI coding agent with a built-in profile
+greywall -- claude
 
 # Learn what filesystem access a command needs, then auto-generate a profile
 greywall --learning -- opencode
@@ -101,7 +118,7 @@ greywall setup
 
 ### Agent profiles
 
-Greywall ships with built-in profiles for popular AI coding agents (Claude, Codex, Cursor, Aider, Goose, Gemini, OpenCode, Amp, Cline, Copilot, Kilo, Auggie, Droid) and toolchains (Node, Python, Go, Rust, Java, Ruby, Docker).
+Greywall ships with built-in sandbox profiles for popular AI coding agents (Claude Code, Codex, Cursor, Aider, Goose, Gemini CLI, OpenCode, Amp, Cline, Copilot, Kilo, Auggie, Droid) and toolchains (Node, Python, Go, Rust, Java, Ruby, Docker).
 
 On first run, greywall shows what the profile allows and lets you apply, edit, or skip:
 
@@ -206,7 +223,8 @@ Greywall can also be used as a [Go package](docs/library.md).
 
 ## Documentation
 
-- [Documentation Index](docs/README.md)
+Full documentation is available at [docs.greywall.io](https://docs.greywall.io/) and in the `docs/` directory:
+
 - [Quickstart Guide](docs/quickstart.md)
 - [Why Greywall](docs/why-greywall.md)
 - [Configuration Reference](docs/configuration.md)
