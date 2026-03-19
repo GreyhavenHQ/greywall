@@ -60,6 +60,7 @@ make setup && make build
 
 - `bubblewrap` - container-free sandboxing (required)
 - `socat` - network bridging (required)
+- `xdg-dbus-proxy` - filtered D-Bus proxy for notify-send support (optional)
 
 Check dependency status with `greywall check`.
 
@@ -198,7 +199,7 @@ By default, traffic routes through the GreyProxy SOCKS5 proxy at `localhost:4305
 | **Environment sanitization** | ✅ | ✅ |
 | **Learning mode** | ✅ (strace) | ✅ (eslogger, requires sudo) |
 | **PTY support** | ✅ | ✅ |
-| **External deps** | bwrap, socat | none |
+| **External deps** | bwrap, socat, xdg-dbus-proxy (optional) | none |
 
 See [platform support](docs/platform-support.md) for more details.
 

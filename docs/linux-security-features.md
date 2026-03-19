@@ -114,7 +114,7 @@ This is always active in all sandbox modes (deny-by-default, legacy, and learnin
 
 ### What breaks with D-Bus isolation
 
-- `notify-send` (uses D-Bus `org.freedesktop.Notifications`)
+- `notify-send` - works if `xdg-dbus-proxy` is installed (only `org.freedesktop.Notifications` is allowed); blocked otherwise
 - 1Password CLI (uses D-Bus for IPC)
 - Git over SSH (SSH agent socket is under `/run/user/`; use HTTPS or add `allowRead` for the socket)
 - GPG commit signing (GPG agent socket is under `/run/user/`; add `allowRead` if needed)
@@ -208,26 +208,28 @@ On Linux, violation monitoring (`greywall -m`) shows:
 ### Debian/Ubuntu
 
 ```bash
-sudo apt install bubblewrap socat
+sudo apt install bubblewrap socat xdg-dbus-proxy
 ```
 
 ### Fedora/RHEL
 
 ```bash
-sudo dnf install bubblewrap socat
+sudo dnf install bubblewrap socat xdg-dbus-proxy
 ```
 
 ### Arch Linux
 
 ```bash
-sudo pacman -S bubblewrap socat
+sudo pacman -S bubblewrap socat xdg-dbus-proxy
 ```
 
 ### Alpine Linux
 
 ```bash
-sudo apk add bubblewrap socat
+sudo apk add bubblewrap socat xdg-dbus-proxy
 ```
+
+`xdg-dbus-proxy` is optional but recommended. Without it, `notify-send` will not work inside the sandbox.
 
 ## Enabling eBPF Monitoring
 

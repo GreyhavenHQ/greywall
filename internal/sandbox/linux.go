@@ -290,24 +290,138 @@ func (b *ReverseBridge) Cleanup() {
 	}
 }
 
+// DbusBridge runs xdg-dbus-proxy to provide a filtered D-Bus session bus inside the sandbox.
+// Only org.freedesktop.Notifications is allowed, blocking GVFS, gnome-keyring, and all
+// other D-Bus services that could be used for sandbox escape.
+type DbusBridge struct {
+	SocketPath string    // Filtered proxy socket path
+	process    *exec.Cmd // xdg-dbus-proxy process
+	debug      bool
+}
+
+// NewDbusBridge creates a filtered D-Bus proxy that only allows desktop notifications.
+// Returns nil (not an error) if xdg-dbus-proxy is not available or D-Bus is not running.
+func NewDbusBridge(debug bool) *DbusBridge {
+	if _, err := exec.LookPath("xdg-dbus-proxy"); err != nil {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] xdg-dbus-proxy not found, notify-send will not work inside sandbox\n")
+		}
+		return nil
+	}
+
+	// Find the host D-Bus session bus address
+	busAddr := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+	if busAddr == "" {
+		uid := os.Getuid()
+		defaultSocket := fmt.Sprintf("/run/user/%d/bus", uid)
+		if fileExists(defaultSocket) {
+			busAddr = fmt.Sprintf("unix:path=%s", defaultSocket)
+		}
+	}
+	if busAddr == "" {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] No D-Bus session bus found, skipping D-Bus proxy\n")
+		}
+		return nil
+	}
+
+	id := make([]byte, 8)
+	if _, err := rand.Read(id); err != nil {
+		return nil
+	}
+	socketID := hex.EncodeToString(id)
+
+	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("greywall-dbus-%s.sock", socketID))
+
+	bridge := &DbusBridge{
+		SocketPath: socketPath,
+		debug:      debug,
+	}
+
+	// Start xdg-dbus-proxy with strict filtering:
+	// --filter: deny everything by default
+	// --talk=org.freedesktop.Notifications: allow notify-send
+	args := []string{
+		busAddr,
+		socketPath,
+		"--filter",
+		"--talk=org.freedesktop.Notifications",
+	}
+	bridge.process = exec.Command("xdg-dbus-proxy", args...) //nolint:gosec // args constructed from trusted input
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Starting D-Bus proxy: xdg-dbus-proxy %s\n", strings.Join(args, " "))
+	}
+	if err := bridge.process.Start(); err != nil {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Failed to start D-Bus proxy: %v\n", err)
+		}
+		return nil
+	}
+
+	// Wait for socket to be created
+	for range 50 {
+		if fileExists(socketPath) {
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus proxy ready (%s)\n", socketPath)
+			}
+			return bridge
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	bridge.Cleanup()
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Timeout waiting for D-Bus proxy socket\n")
+	}
+	return nil
+}
+
+// Cleanup stops the D-Bus proxy and removes the socket file.
+func (b *DbusBridge) Cleanup() {
+	if b.process != nil && b.process.Process != nil {
+		_ = b.process.Process.Kill()
+		_ = b.process.Wait()
+	}
+	_ = os.Remove(b.SocketPath)
+
+	if b.debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus proxy cleaned up\n")
+	}
+}
+
 // dbusIsolationArgs returns bwrap arguments to block the D-Bus session bus.
 // The D-Bus session socket at /run/user/<uid>/bus allows sandboxed processes to
 // communicate with host services (GVFS for arbitrary file reads, gnome-keyring
 // for stored passwords, Flatpak portal for process launch outside sandbox).
 // We overlay /run/user with a tmpfs, hiding all user session sockets.
+// If a DbusBridge is provided, its filtered socket is bind-mounted as the session
+// bus, allowing only org.freedesktop.Notifications (notify-send).
 //
 // This also blocks SSH agent, GPG agent, Wayland, PipeWire, and other sockets
 // under /run/user/. SSH/GPG can be re-added via allowRead in the config if needed.
-func dbusIsolationArgs(debug bool) []string {
+func dbusIsolationArgs(dbusBridge *DbusBridge, debug bool) []string {
 	if !fileExists("/run/user") {
 		return nil
 	}
 
-	if debug {
+	uid := os.Getuid()
+	userRunDir := fmt.Sprintf("/run/user/%d", uid)
+
+	args := []string{"--tmpfs", "/run/user"}
+
+	// If we have a filtered D-Bus proxy, bind-mount it as the session bus socket
+	// so notify-send works while everything else (GVFS, keyring, etc.) is blocked
+	if dbusBridge != nil {
+		args = append(args, "--dir", userRunDir)
+		args = append(args, "--bind", dbusBridge.SocketPath, filepath.Join(userRunDir, "bus"))
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus session bus filtered (only org.freedesktop.Notifications allowed)\n")
+		}
+	} else if debug {
 		fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus session bus isolated (--tmpfs /run/user)\n")
 	}
 
-	return []string{"--tmpfs", "/run/user"}
+	return args
 }
 
 func fileExists(path string) bool {
@@ -418,7 +532,7 @@ func getMandatoryDenyPaths(cwd string) []string {
 // buildDenyByDefaultMounts builds bwrap arguments for deny-by-default filesystem isolation.
 // Starts with --tmpfs / (empty root), then selectively mounts system paths read-only,
 // CWD read-write, and user tooling paths read-only. Sensitive files within CWD are masked.
-func buildDenyByDefaultMounts(cfg *config.Config, cwd string, debug bool) []string {
+func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBridge, debug bool) []string {
 	var args []string
 	home, _ := os.UserHomeDir()
 
@@ -449,7 +563,7 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, debug bool) []stri
 	// /run/user/<uid>/bus exposes all host session services (file read via GVFS,
 	// password read via gnome-keyring, process launch via Flatpak portal).
 	// --tmpfs /run/user overlays the bind-mounted /run, hiding the D-Bus socket.
-	args = append(args, dbusIsolationArgs(debug)...)
+	args = append(args, dbusIsolationArgs(dbusBridge, debug)...)
 
 	// /sys needs to be accessible for system info
 	if fileExists("/sys") && canMountOver("/sys") {
@@ -620,8 +734,8 @@ func isSystemMountPoint(path string) bool {
 
 // WrapCommandLinux wraps a command with Linux bubblewrap sandbox.
 // It uses available security features (Landlock, seccomp) with graceful fallback.
-func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, tun2socksPath string, debug bool) (string, error) {
-	return WrapCommandLinuxWithOptions(cfg, command, proxyBridge, dnsBridge, reverseBridge, tun2socksPath, LinuxSandboxOptions{
+func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, dbusBridge *DbusBridge, tun2socksPath string, debug bool) (string, error) {
+	return WrapCommandLinuxWithOptions(cfg, command, proxyBridge, dnsBridge, reverseBridge, dbusBridge, tun2socksPath, LinuxSandboxOptions{
 		UseLandlock: true, // Enabled by default, will fall back if not available
 		UseSeccomp:  true, // Enabled by default
 		UseEBPF:     true, // Enabled by default if available
@@ -630,7 +744,7 @@ func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBrid
 }
 
 // WrapCommandLinuxWithOptions wraps a command with configurable sandbox options.
-func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
+func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, dbusBridge *DbusBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		return "", fmt.Errorf("bubblewrap (bwrap) is required on Linux but not found: %w", err)
 	}
@@ -709,7 +823,7 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		// Block D-Bus session bus even in learning mode to prevent sandbox escape
 		// via GVFS/gnome-keyring. dconf and Wayland still work since they use
 		// their own sockets, not the D-Bus session bus.
-		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(opts.Debug)...)
+		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.Debug)...)
 
 	}
 
@@ -723,12 +837,12 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		if opts.Debug {
 			fmt.Fprintf(os.Stderr, "[greywall:linux] DefaultDenyRead mode enabled - tmpfs root with selective mounts\n")
 		}
-		bwrapArgs = append(bwrapArgs, buildDenyByDefaultMounts(cfg, cwd, opts.Debug)...)
+		bwrapArgs = append(bwrapArgs, buildDenyByDefaultMounts(cfg, cwd, dbusBridge, opts.Debug)...)
 	default:
 		// Legacy mode: bind entire root filesystem read-only
 		bwrapArgs = append(bwrapArgs, "--ro-bind", "/", "/")
 		// Block D-Bus session bus to prevent sandbox escape via GVFS/gnome-keyring
-		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(opts.Debug)...)
+		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.Debug)...)
 	}
 
 	// Mount special filesystems

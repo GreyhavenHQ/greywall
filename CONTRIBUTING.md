@@ -75,11 +75,11 @@ echo '{"network":{"proxyUrl":"socks5://localhost:43052"}}' > /tmp/test.json
 
 ### Testing on Linux
 
-Requires `bubblewrap` and `socat`:
+Requires `bubblewrap` and `socat` (plus optional `xdg-dbus-proxy` for notify-send):
 
 ```bash
 # Ubuntu/Debian
-sudo apt install bubblewrap socat
+sudo apt install bubblewrap socat xdg-dbus-proxy
 
 # Test in Colima or VM
 ./greywall curl https://example.com

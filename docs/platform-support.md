@@ -19,7 +19,7 @@ Greywall supports Linux and macOS with platform-specific sandboxing technologies
 | **Environment sanitization** | ✅ | ✅ |
 | **Learning mode** | ✅ (strace) | ✅ (eslogger, requires sudo) |
 | **PTY support** | ✅ | ✅ |
-| **External deps** | bwrap, socat | none |
+| **External deps** | bwrap, socat, xdg-dbus-proxy (optional) | none |
 
 ## Linux
 
@@ -34,7 +34,7 @@ Greywall uses [bubblewrap](https://github.com/containers/bubblewrap) for contain
 
 All features degrade gracefully when the kernel or permissions don't support them. Run `greywall --linux-features` to see what's available on your system.
 
-**Dependencies:** `bubblewrap`, `socat`
+**Dependencies:** `bubblewrap`, `socat`, `xdg-dbus-proxy` (optional, for notify-send support)
 
 ## macOS
 

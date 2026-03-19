@@ -27,6 +27,19 @@ type ReverseBridge struct {
 	SocketPaths []string
 }
 
+// DbusBridge is a stub for non-Linux platforms.
+type DbusBridge struct {
+	SocketPath string
+}
+
+// NewDbusBridge returns nil on non-Linux platforms.
+func NewDbusBridge(debug bool) *DbusBridge {
+	return nil
+}
+
+// Cleanup is a no-op on non-Linux platforms.
+func (b *DbusBridge) Cleanup() {}
+
 // LinuxSandboxOptions is a stub for non-Linux platforms.
 type LinuxSandboxOptions struct {
 	UseLandlock   bool
@@ -63,12 +76,12 @@ func NewReverseBridge(ports []int, debug bool) (*ReverseBridge, error) {
 func (b *ReverseBridge) Cleanup() {}
 
 // WrapCommandLinux returns an error on non-Linux platforms.
-func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, tun2socksPath string, debug bool) (string, error) {
+func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, dbusBridge *DbusBridge, tun2socksPath string, debug bool) (string, error) {
 	return "", fmt.Errorf("linux sandbox not available on this platform")
 }
 
 // WrapCommandLinuxWithOptions returns an error on non-Linux platforms.
-func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
+func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, dbusBridge *DbusBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
 	return "", fmt.Errorf("linux sandbox not available on this platform")
 }
 

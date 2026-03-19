@@ -142,6 +142,23 @@ If you're running a server inside the sandbox that must accept connections:
 - set `network.allowLocalBinding: true` (to bind)
 - use `-p <port>` (to expose inbound port(s))
 
+## notify-send fails inside sandbox
+
+`notify-send` requires the D-Bus session bus, which is blocked to prevent sandbox escape via GVFS/gnome-keyring. Install `xdg-dbus-proxy` to enable it:
+
+```bash
+# Ubuntu/Debian
+sudo apt install xdg-dbus-proxy
+
+# Fedora
+sudo dnf install xdg-dbus-proxy
+
+# Arch
+sudo pacman -S xdg-dbus-proxy
+```
+
+When installed, greywall automatically starts a filtered D-Bus proxy that only allows `org.freedesktop.Notifications`, blocking all other services. Run `greywall check` to verify.
+
 ## "Permission denied" on file writes
 
 Writes are denied by default.

@@ -23,14 +23,16 @@ On Linux, you also need:
 
 ```bash
 # Ubuntu/Debian
-sudo apt install bubblewrap socat
+sudo apt install bubblewrap socat xdg-dbus-proxy
 
 # Fedora
-sudo dnf install bubblewrap socat
+sudo dnf install bubblewrap socat xdg-dbus-proxy
 
 # Arch
-sudo pacman -S bubblewrap socat
+sudo pacman -S bubblewrap socat xdg-dbus-proxy
 ```
+
+`xdg-dbus-proxy` is optional but recommended. It enables `notify-send` inside the sandbox while keeping the D-Bus session bus isolated.
 
 ### Do I need sudo to run greywall?
 

@@ -314,10 +314,21 @@ func PrintDependencyStatus() []string {
 
 	// D-Bus session bus isolation
 	dbusSocketPath := fmt.Sprintf("/run/user/%d/bus", os.Getuid())
+	hasDbusProxy := commandExists("xdg-dbus-proxy")
 	if fileExists(dbusSocketPath) {
-		fmt.Println(CheckOK("D-Bus session bus isolated (host socket present, will be blocked)"))
+		if hasDbusProxy {
+			fmt.Println(CheckOK("D-Bus isolated (notify-send proxied via xdg-dbus-proxy)"))
+		} else {
+			fmt.Println(CheckOK("D-Bus isolated (notify-send will not work)"))
+		}
 	} else {
-		fmt.Println(CheckOK("D-Bus session bus isolated (no host socket found)"))
+		fmt.Println(CheckOK("D-Bus isolated (no host socket found)"))
+	}
+	if hasDbusProxy {
+		fmt.Println(CheckOK("xdg-dbus-proxy"))
+	} else {
+		fmt.Println(CheckFail("xdg-dbus-proxy — optional, enables notify-send inside sandbox"))
+		steps = append(steps, suggestInstallDbusProxy())
 	}
 
 	// Network isolation (transparent proxy via tun2socks + network namespace)
@@ -378,6 +389,25 @@ func suggestInstallCmd(features *LinuxFeatures) string {
 		return fmt.Sprintf("sudo zypper install %s", pkgs)
 	default:
 		return fmt.Sprintf("install %s using your package manager", pkgs)
+	}
+}
+
+func suggestInstallDbusProxy() string {
+	switch {
+	case commandExists("apt-get"):
+		return "sudo apt install xdg-dbus-proxy"
+	case commandExists("dnf"):
+		return "sudo dnf install xdg-dbus-proxy"
+	case commandExists("yum"):
+		return "sudo yum install xdg-dbus-proxy"
+	case commandExists("pacman"):
+		return "sudo pacman -S xdg-dbus-proxy"
+	case commandExists("apk"):
+		return "sudo apk add xdg-dbus-proxy"
+	case commandExists("zypper"):
+		return "sudo zypper install xdg-dbus-proxy"
+	default:
+		return "install xdg-dbus-proxy using your package manager"
 	}
 }
 
