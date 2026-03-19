@@ -312,6 +312,14 @@ func PrintDependencyStatus() []string {
 		fmt.Println(CheckFail("landlock"))
 	}
 
+	// D-Bus session bus isolation
+	dbusSocketPath := fmt.Sprintf("/run/user/%d/bus", os.Getuid())
+	if fileExists(dbusSocketPath) {
+		fmt.Println(CheckOK("D-Bus session bus isolated (host socket present, will be blocked)"))
+	} else {
+		fmt.Println(CheckOK("D-Bus session bus isolated (no host socket found)"))
+	}
+
 	// Network isolation (transparent proxy via tun2socks + network namespace)
 	if features.CanUseTransparentProxy() {
 		fmt.Println(CheckOK("network isolation"))

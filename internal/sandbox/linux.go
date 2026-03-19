@@ -290,6 +290,26 @@ func (b *ReverseBridge) Cleanup() {
 	}
 }
 
+// dbusIsolationArgs returns bwrap arguments to block the D-Bus session bus.
+// The D-Bus session socket at /run/user/<uid>/bus allows sandboxed processes to
+// communicate with host services (GVFS for arbitrary file reads, gnome-keyring
+// for stored passwords, Flatpak portal for process launch outside sandbox).
+// We overlay /run/user with a tmpfs, hiding all user session sockets.
+//
+// This also blocks SSH agent, GPG agent, Wayland, PipeWire, and other sockets
+// under /run/user/. SSH/GPG can be re-added via allowRead in the config if needed.
+func dbusIsolationArgs(debug bool) []string {
+	if !fileExists("/run/user") {
+		return nil
+	}
+
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus session bus isolated (--tmpfs /run/user)\n")
+	}
+
+	return []string{"--tmpfs", "/run/user"}
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path) //nolint:gosec // internal paths only
 	return err == nil
@@ -424,6 +444,12 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, debug bool) []stri
 			args = append(args, "--ro-bind", p, p)
 		}
 	}
+
+	// Block D-Bus session bus to prevent sandbox escape via GVFS/gnome-keyring.
+	// /run/user/<uid>/bus exposes all host session services (file read via GVFS,
+	// password read via gnome-keyring, process launch via Flatpak portal).
+	// --tmpfs /run/user overlays the bind-mounted /run, hiding the D-Bus socket.
+	args = append(args, dbusIsolationArgs(debug)...)
 
 	// /sys needs to be accessible for system info
 	if fileExists("/sys") && canMountOver("/sys") {
@@ -680,13 +706,10 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 			bwrapArgs = append(bwrapArgs, "--bind", cwd, cwd)
 		}
 
-		// Make XDG_RUNTIME_DIR writable so dconf and other runtime services
-		// (Wayland, PulseAudio, D-Bus) work inside the sandbox.
-		// Writes to /run/ are already filtered out by the learning parser.
-		xdgRuntime := os.Getenv("XDG_RUNTIME_DIR")
-		if xdgRuntime != "" && fileExists(xdgRuntime) {
-			bwrapArgs = append(bwrapArgs, "--bind", xdgRuntime, xdgRuntime)
-		}
+		// Block D-Bus session bus even in learning mode to prevent sandbox escape
+		// via GVFS/gnome-keyring. dconf and Wayland still work since they use
+		// their own sockets, not the D-Bus session bus.
+		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(opts.Debug)...)
 
 	}
 
@@ -704,6 +727,8 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	default:
 		// Legacy mode: bind entire root filesystem read-only
 		bwrapArgs = append(bwrapArgs, "--ro-bind", "/", "/")
+		// Block D-Bus session bus to prevent sandbox escape via GVFS/gnome-keyring
+		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(opts.Debug)...)
 	}
 
 	// Mount special filesystems
