@@ -445,6 +445,8 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 ; Mach IPC - specific services only
 (allow mach-lookup
   (global-name "com.apple.audio.systemsoundserver")
+  (global-name "com.apple.audio.audiohald")
+  (global-name "com.apple.audio.AudioComponentRegistrar")
   (global-name "com.apple.distributed_notifications@Uv3")
   (global-name "com.apple.FontObjectsServer")
   (global-name "com.apple.fonts")
