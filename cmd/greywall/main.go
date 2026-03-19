@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -525,6 +526,29 @@ func runCheck(_ *cobra.Command, _ []string) error {
 
 	steps := sandbox.PrintDependencyStatus()
 
+	// WSL2: check for common issues that break bwrap namespace setup
+	if isWSL() {
+		if info, err := os.Lstat("/etc/resolv.conf"); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			fmt.Println(sandbox.CheckFail("WSL2: /etc/resolv.conf is a symlink (bwrap will fail)"))
+			steps = append(steps,
+				"Fix WSL2 resolv.conf symlink:\n"+
+					"    sudo rm /etc/resolv.conf && echo \"nameserver 10.255.255.254\" | sudo tee /etc/resolv.conf\n"+
+					"    Add to /etc/wsl.conf: [network] generateResolvConf = false  |  [boot] systemd = true\n"+
+					"    Then run: wsl --shutdown from PowerShell",
+			)
+		} else {
+			fmt.Println(sandbox.CheckOK("WSL2: /etc/resolv.conf is a real file"))
+		}
+		if !isSystemdEnabled() {
+			fmt.Println(sandbox.CheckFail("WSL2: systemd not enabled (required for bwrap namespace support)"))
+			steps = append(steps,
+				"Enable systemd in /etc/wsl.conf: add [boot] systemd = true, then run wsl --shutdown",
+			)
+		} else {
+			fmt.Println(sandbox.CheckOK("WSL2: systemd enabled"))
+		}
+	}
+
 	status := proxy.Detect()
 	brewManaged := proxy.IsBrewManaged(status.Path)
 
@@ -582,6 +606,33 @@ func runCheck(_ *cobra.Command, _ []string) error {
 	}
 
 	return nil
+}
+
+// isWSL reports whether the current environment is Windows Subsystem for Linux.
+func isWSL() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	// WSL sets the WSL_DISTRO_NAME environment variable
+	if os.Getenv("WSL_DISTRO_NAME") != "" {
+		return true
+	}
+	// Fallback: check /proc/version for Microsoft signature
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(data))
+	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
+}
+
+// isSystemdEnabled reports whether systemd is running as PID 1.
+func isSystemdEnabled() bool {
+	target, err := os.Readlink("/proc/1/exe")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(target, "systemd")
 }
 
 // newSetupCmd creates the setup subcommand for installing greyproxy.

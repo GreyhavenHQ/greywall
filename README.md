@@ -2,7 +2,7 @@
 
 Greywall wraps commands in a deny-by-default sandbox. Filesystem access is restricted to the current directory by default. Use `--learning` to trace what else a command needs and auto-generate a config profile. All network traffic is transparently redirected through [greyproxy](https://github.com/GreyhavenHQ/greyproxy), a deny-by-default transparent proxy with a live allow/deny dashboard. Run `greywall setup` to install greyproxy automatically.
 
-*Supports Linux and macOS. See [platform support](docs/platform-support.md) for details.*
+*Supports Linux, macOS, and Windows (via WSL). See [platform support](docs/platform-support.md) for details.*
 
 https://github.com/user-attachments/assets/7d62d45d-a201-4f24-9138-b460e4c157a8
 
@@ -183,22 +183,51 @@ By default, traffic routes through the GreyProxy SOCKS5 proxy at `localhost:4305
 
 ## Platform support
 
-| Feature | Linux | macOS |
-|---------|:-----:|:-----:|
-| **Sandbox engine** | bubblewrap | sandbox-exec (Seatbelt) |
-| **Filesystem deny-by-default (read/write)** | ✅ | ✅ |
-| **Syscall filtering** | ✅ (seccomp) | ✅ (Seatbelt) |
-| **Filesystem access control** | ✅ (Landlock + bubblewrap) | ✅ (Seatbelt) |
-| **Violation monitoring** | ✅ (eBPF) | ✅ (Seatbelt denial logs) |
-| **Transparent proxy (full traffic capture)** | ✅ (tun2socks + TUN) | ❌ |
-| **DNS capture** | ✅ (DNS bridge) | ❌ |
-| **Proxy via env vars (SOCKS5 / HTTP)** | ✅ | ✅ |
-| **Network isolation** | ✅ (network namespace) | N/A |
-| **Command allow/deny lists** | ✅ | ✅ |
-| **Environment sanitization** | ✅ | ✅ |
-| **Learning mode** | ✅ (strace) | ✅ (eslogger, requires sudo) |
-| **PTY support** | ✅ | ✅ |
-| **External deps** | bwrap, socat | none |
+| Feature | Linux | macOS | Windows (WSL) |
+|---------|:-----:|:-----:|:-------------:|
+| **Sandbox engine** | bubblewrap | sandbox-exec (Seatbelt) | bubblewrap (WSL 2) |
+| **Filesystem deny-by-default (read/write)** | ✅ | ✅ | ✅ (WSL 2) |
+| **Syscall filtering** | ✅ (seccomp) | ✅ (Seatbelt) | ✅ (WSL 2) |
+| **Filesystem access control** | ✅ (Landlock + bubblewrap) | ✅ (Seatbelt) | ✅ (WSL 2) |
+| **Violation monitoring** | ✅ (eBPF) | ✅ (Seatbelt denial logs) | ✅ (WSL 2) |
+| **Transparent proxy (full traffic capture)** | ✅ (tun2socks + TUN) | ❌ | ✅ (WSL 2) |
+| **DNS capture** | ✅ (DNS bridge) | ❌ | ✅ (WSL 2) |
+| **Proxy via env vars (SOCKS5 / HTTP)** | ✅ | ✅ | ✅ |
+| **Network isolation** | ✅ (network namespace) | N/A | ✅ (WSL 2) |
+| **Command allow/deny lists** | ✅ | ✅ | ✅ |
+| **Environment sanitization** | ✅ | ✅ | ✅ |
+| **Learning mode** | ✅ (strace) | ✅ (eslogger, requires sudo) | ✅ (WSL 2) |
+| **PTY support** | ✅ | ✅ | ✅ |
+| **External deps** | bwrap, socat | none | bwrap, socat (inside WSL) |
+
+### Windows (WSL)
+
+Greywall runs on Windows through **WSL 2** (Windows Subsystem for Linux). WSL 2 provides a full Linux kernel, so all Linux sandboxing features — including bubblewrap, seccomp, Landlock, and network namespaces — work as expected.
+
+**Requirements:**
+
+1. **WSL 2** — WSL 1 is not supported (no real Linux kernel).
+2. **systemd enabled** — required for bubblewrap namespace support. Add to `/etc/wsl.conf`:
+   ```ini
+   [boot]
+   systemd = true
+   ```
+3. **`/etc/resolv.conf` must not be a symlink** — the default WSL-generated symlink breaks bwrap namespace setup. Fix it:
+   ```bash
+   sudo rm /etc/resolv.conf
+   echo "nameserver 10.255.255.254" | sudo tee /etc/resolv.conf
+   ```
+   Then disable auto-generation in `/etc/wsl.conf`:
+   ```ini
+   [network]
+   generateResolvConf = false
+   ```
+4. **Restart WSL** after making changes:
+   ```powershell
+   wsl --shutdown
+   ```
+
+Run `greywall check` to verify your WSL environment is correctly configured.
 
 See [platform support](docs/platform-support.md) for more details.
 
