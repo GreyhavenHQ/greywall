@@ -16,6 +16,7 @@ type Manager struct {
 	proxyBridge   *ProxyBridge
 	dnsBridge     *DnsBridge
 	reverseBridge *ReverseBridge
+	forwardBridge *ForwardBridge
 	dbusBridge    *DbusBridge
 	tun2socksPath string // path to extracted tun2socks binary on host
 	exposedPorts  []int
@@ -183,6 +184,26 @@ func (m *Manager) Initialize() error {
 			m.logDebug("Skipping reverse bridge (no network namespace, ports accessible directly)")
 		}
 
+		// Set up forward bridge for localhost outbound (sandbox -> host localhost ports)
+		if len(m.config.Network.ForwardPorts) > 0 && features.CanUnshareNet {
+			forwardBridge, err := NewForwardBridge(m.config.Network.ForwardPorts, m.debug)
+			if err != nil {
+				if m.proxyBridge != nil {
+					m.proxyBridge.Cleanup()
+				}
+				if m.reverseBridge != nil {
+					m.reverseBridge.Cleanup()
+				}
+				if m.tun2socksPath != "" {
+					_ = os.Remove(m.tun2socksPath)
+				}
+				return fmt.Errorf("failed to initialize forward bridge: %w", err)
+			}
+			m.forwardBridge = forwardBridge
+		} else if len(m.config.Network.ForwardPorts) > 0 && m.debug {
+			m.logDebug("Skipping forward bridge (no network namespace, ports accessible directly)")
+		}
+
 		// Set up filtered D-Bus proxy for notify-send support
 		// Returns nil gracefully if xdg-dbus-proxy is not installed
 		m.dbusBridge = NewDbusBridge(m.debug)
@@ -227,7 +248,7 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 		if m.learning {
 			return m.wrapCommandLearning(command)
 		}
-		return WrapCommandLinux(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.dbusBridge, m.tun2socksPath, m.debug)
+		return WrapCommandLinux(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.forwardBridge, m.dbusBridge, m.tun2socksPath, m.debug)
 	default:
 		return "", fmt.Errorf("unsupported platform: %s", plat)
 	}
@@ -245,7 +266,7 @@ func (m *Manager) wrapCommandLearning(command string) (string, error) {
 
 	m.logDebug("Strace log file: %s", m.straceLogPath)
 
-	return WrapCommandLinuxWithOptions(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.dbusBridge, m.tun2socksPath, LinuxSandboxOptions{
+	return WrapCommandLinuxWithOptions(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.forwardBridge, m.dbusBridge, m.tun2socksPath, LinuxSandboxOptions{
 		UseLandlock:   false, // Disabled: seccomp blocks ptrace which strace needs
 		UseSeccomp:    false, // Disabled: conflicts with strace
 		UseEBPF:       false,
@@ -280,6 +301,9 @@ func (m *Manager) Cleanup() {
 
 	if m.dbusBridge != nil {
 		m.dbusBridge.Cleanup()
+	}
+	if m.forwardBridge != nil {
+		m.forwardBridge.Cleanup()
 	}
 	if m.reverseBridge != nil {
 		m.reverseBridge.Cleanup()

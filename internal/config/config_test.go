@@ -668,6 +668,60 @@ func TestMergeSSHConfig(t *testing.T) {
 	})
 }
 
+func TestMergeForwardPorts(t *testing.T) {
+	t.Run("merge forward ports deduplicates", func(t *testing.T) {
+		base := &Config{
+			Network: NetworkConfig{
+				ForwardPorts: []int{5432, 6379},
+			},
+		}
+		override := &Config{
+			Network: NetworkConfig{
+				ForwardPorts: []int{6379, 8080},
+			},
+		}
+		result := Merge(base, override)
+
+		if len(result.Network.ForwardPorts) != 3 {
+			t.Errorf("expected 3 forward ports, got %d: %v", len(result.Network.ForwardPorts), result.Network.ForwardPorts)
+		}
+		expected := map[int]bool{5432: true, 6379: true, 8080: true}
+		for _, p := range result.Network.ForwardPorts {
+			if !expected[p] {
+				t.Errorf("unexpected port %d in merged result", p)
+			}
+		}
+	})
+
+	t.Run("merge forward ports empty base", func(t *testing.T) {
+		base := &Config{}
+		override := &Config{
+			Network: NetworkConfig{
+				ForwardPorts: []int{3000},
+			},
+		}
+		result := Merge(base, override)
+
+		if len(result.Network.ForwardPorts) != 1 || result.Network.ForwardPorts[0] != 3000 {
+			t.Errorf("expected [3000], got %v", result.Network.ForwardPorts)
+		}
+	})
+
+	t.Run("merge forward ports empty override", func(t *testing.T) {
+		base := &Config{
+			Network: NetworkConfig{
+				ForwardPorts: []int{3000},
+			},
+		}
+		override := &Config{}
+		result := Merge(base, override)
+
+		if len(result.Network.ForwardPorts) != 1 || result.Network.ForwardPorts[0] != 3000 {
+			t.Errorf("expected [3000], got %v", result.Network.ForwardPorts)
+		}
+	})
+}
+
 func TestValidateProxyURL(t *testing.T) {
 	tests := []struct {
 		name    string

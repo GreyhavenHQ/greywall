@@ -39,6 +39,7 @@ var (
 	dnsAddr       string
 	cmdString     string
 	exposePorts   []string
+	forwardPorts  []string
 	exitCode      int
 	showVersion   bool
 	linuxFeatures bool
@@ -79,6 +80,7 @@ Examples:
   greywall -c "echo hello && ls"                                # Run with shell expansion
   greywall --settings config.json npm install
   greywall -p 3000 -c "npm run dev"                             # Expose port 3000
+  greywall -f 5432 -- psql -h localhost                          # Forward host port into sandbox
   greywall --learning -- opencode                                # Learn filesystem needs
 
 Configuration file format:
@@ -109,6 +111,7 @@ Configuration file format:
 	rootCmd.Flags().StringVar(&httpProxyURL, "http-proxy", "", "HTTP CONNECT proxy URL (default: http://localhost:43051)")
 	rootCmd.Flags().StringVarP(&cmdString, "c", "c", "", "Run command string directly (like sh -c)")
 	rootCmd.Flags().StringArrayVarP(&exposePorts, "port", "p", nil, "Expose port for inbound connections (can be used multiple times)")
+	rootCmd.Flags().StringArrayVarP(&forwardPorts, "forward", "f", nil, "Forward host localhost port into sandbox (can be used multiple times)")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Show version information")
 	rootCmd.Flags().BoolVar(&linuxFeatures, "linux-features", false, "Show available Linux security features and exit")
 	rootCmd.Flags().BoolVar(&learning, "learning", false, "Run in learning mode: trace filesystem access and generate a config profile")
@@ -173,6 +176,19 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 	if debug && len(ports) > 0 {
 		fmt.Fprintf(os.Stderr, "[greywall] Exposing ports: %v\n", ports)
+	}
+
+	var fwdPorts []int
+	for _, p := range forwardPorts {
+		port, err := strconv.Atoi(p)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("invalid forward port: %s", p)
+		}
+		fwdPorts = append(fwdPorts, port)
+	}
+
+	if debug && len(fwdPorts) > 0 {
+		fmt.Fprintf(os.Stderr, "[greywall] Forwarding host ports: %v\n", fwdPorts)
 	}
 
 	// Load config: settings file > default path > default config
@@ -311,6 +327,11 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	}
 	if debug {
 		fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy credentials to %q:proxy\n", proxyUser)
+	}
+
+	// Merge CLI forward ports into config
+	if len(fwdPorts) > 0 {
+		cfg.Network.ForwardPorts = append(cfg.Network.ForwardPorts, fwdPorts...)
 	}
 
 	// Learning mode setup

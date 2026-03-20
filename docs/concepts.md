@@ -19,13 +19,37 @@ When you allow domains, greywall:
 ### Localhost controls
 
 - `allowLocalBinding`: lets a sandboxed process *listen* on local ports (e.g. dev servers).
-- `allowLocalOutbound`: lets a sandboxed process connect to `localhost` services (e.g. Redis/Postgres on your machine).
+- `allowLocalOutbound`: lets a sandboxed process connect to `localhost` services (macOS only).
 - `-p/--port`: exposes inbound ports so things outside the sandbox can reach your server.
+- `-f/--forward`: forwards a host localhost port into the sandbox (Linux only).
+- `forwardPorts`: config equivalent of `-f` for specifying ports to forward.
 
 These are separate on purpose. A typical safe default for dev servers is:
 
 - allow binding + expose just the needed port(s)
 - disallow localhost outbound unless you explicitly need it
+
+### Port forwarding: platform differences
+
+On macOS, the sandbox shares the host network stack, so `allowLocalOutbound: true` is enough for the sandboxed process to connect to any host localhost service.
+
+On Linux, the sandbox runs in an isolated network namespace (bubblewrap `--unshare-net`). The host's `localhost` is not reachable from inside the sandbox. To connect to a specific host service, you must explicitly forward its port:
+
+| Feature | macOS | Linux |
+|---------|-------|-------|
+| Sandbox connects to host `localhost` | `allowLocalOutbound: true` | `-f <port>` or `forwardPorts: [port]` |
+| Host connects to sandbox port | `-p <port>` | `-p <port>` |
+| Sandbox listens on local port | `allowLocalBinding: true` | `allowLocalBinding: true` |
+
+Example: connecting to a local database on port 5432 from a sandboxed command:
+
+```bash
+# macOS (allowLocalOutbound in config is sufficient)
+greywall -- psql -h localhost
+
+# Linux (must forward the specific port)
+greywall -f 5432 -- psql -h localhost
+```
 
 ## Filesystem model
 

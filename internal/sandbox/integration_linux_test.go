@@ -540,6 +540,153 @@ func TestLinux_GlobPatternAllowsWriteToMatchingFile(t *testing.T) {
 }
 
 // ============================================================================
+// Forward Bridge Tests
+// ============================================================================
+
+// TestLinux_ForwardBridgeCreatesSocketDir verifies that NewForwardBridge creates
+// sockets in a dedicated subdirectory, not directly in /tmp.
+func TestLinux_ForwardBridgeCreatesSocketDir(t *testing.T) {
+	bridge, err := NewForwardBridge([]int{19876}, false)
+	if err != nil {
+		t.Fatalf("NewForwardBridge failed: %v", err)
+	}
+	defer bridge.Cleanup()
+
+	if len(bridge.SocketPaths) != 1 {
+		t.Fatalf("expected 1 socket path, got %d", len(bridge.SocketPaths))
+	}
+
+	socketPath := bridge.SocketPaths[0]
+	dir := filepath.Dir(socketPath)
+
+	// Socket dir should be a greywall-fwd-* subdirectory, not /tmp itself
+	if dir == os.TempDir() {
+		t.Errorf("socket should be in a subdirectory, not directly in %s: %s", os.TempDir(), socketPath)
+	}
+	if !strings.Contains(dir, "greywall-fwd-") {
+		t.Errorf("socket directory should contain 'greywall-fwd-': %s", dir)
+	}
+
+	// Directory should exist
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Errorf("socket directory should exist: %s", dir)
+	}
+}
+
+// TestLinux_ForwardBridgeCleanup verifies that Cleanup removes sockets and directory.
+func TestLinux_ForwardBridgeCleanup(t *testing.T) {
+	bridge, err := NewForwardBridge([]int{19877}, false)
+	if err != nil {
+		t.Fatalf("NewForwardBridge failed: %v", err)
+	}
+
+	socketPath := bridge.SocketPaths[0]
+	dir := filepath.Dir(socketPath)
+
+	bridge.Cleanup()
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("socket directory should be removed after cleanup: %s", dir)
+	}
+}
+
+// TestLinux_ForwardBridgeMultiplePorts verifies multiple ports create separate sockets.
+func TestLinux_ForwardBridgeMultiplePorts(t *testing.T) {
+	bridge, err := NewForwardBridge([]int{19878, 19879, 19880}, false)
+	if err != nil {
+		t.Fatalf("NewForwardBridge failed: %v", err)
+	}
+	defer bridge.Cleanup()
+
+	if len(bridge.SocketPaths) != 3 {
+		t.Fatalf("expected 3 socket paths, got %d", len(bridge.SocketPaths))
+	}
+	if len(bridge.Ports) != 3 {
+		t.Fatalf("expected 3 ports, got %d", len(bridge.Ports))
+	}
+
+	// All sockets should be in the same directory
+	dir := filepath.Dir(bridge.SocketPaths[0])
+	for _, sp := range bridge.SocketPaths[1:] {
+		if filepath.Dir(sp) != dir {
+			t.Errorf("all sockets should be in the same directory: %s vs %s", dir, filepath.Dir(sp))
+		}
+	}
+}
+
+// TestLinux_ForwardBridgeEmptyPorts returns nil for empty ports.
+func TestLinux_ForwardBridgeEmptyPorts(t *testing.T) {
+	bridge, err := NewForwardBridge([]int{}, false)
+	if err != nil {
+		t.Fatalf("NewForwardBridge failed: %v", err)
+	}
+	if bridge != nil {
+		t.Errorf("expected nil bridge for empty ports")
+	}
+}
+
+// TestLinux_ReverseBridgeCreatesSocketDir verifies that NewReverseBridge also uses
+// a dedicated subdirectory (same fix applied to both bridges).
+func TestLinux_ReverseBridgeCreatesSocketDir(t *testing.T) {
+	bridge, err := NewReverseBridge([]int{19881}, false)
+	if err != nil {
+		t.Fatalf("NewReverseBridge failed: %v", err)
+	}
+	defer bridge.Cleanup()
+
+	if len(bridge.SocketPaths) != 1 {
+		t.Fatalf("expected 1 socket path, got %d", len(bridge.SocketPaths))
+	}
+
+	dir := filepath.Dir(bridge.SocketPaths[0])
+
+	if dir == os.TempDir() {
+		t.Errorf("socket should be in a subdirectory, not directly in %s", os.TempDir())
+	}
+	if !strings.Contains(dir, "greywall-rev-") {
+		t.Errorf("socket directory should contain 'greywall-rev-': %s", dir)
+	}
+}
+
+// TestLinux_ForwardBridgeConnectsToHost verifies that the forward bridge can
+// relay connections from the sandbox to a host localhost port.
+func TestLinux_ForwardBridgeConnectsToHost(t *testing.T) {
+	skipIfAlreadySandboxed(t)
+	skipIfCommandNotFound(t, "socat")
+	skipIfCommandNotFound(t, "curl")
+
+	// Start a simple HTTP server on a random port using socat
+	// socat will respond with a fixed string to any connection
+	workspace := createTempWorkspace(t)
+	cfg := testConfigWithWorkspace(workspace)
+	cfg.Network.ForwardPorts = []int{19999}
+
+	// Start a listener on port 19999 that responds with "FORWARD_OK"
+	listener := exec.Command("socat", //nolint:gosec
+		"TCP-LISTEN:19999,fork,reuseaddr",
+		`EXEC:'echo HTTP/1.0 200 OK\r\n\r\nFORWARD_OK'`,
+	)
+	if err := listener.Start(); err != nil {
+		t.Fatalf("failed to start test listener: %v", err)
+	}
+	defer func() {
+		_ = listener.Process.Kill()
+		_ = listener.Wait()
+	}()
+
+	// Give listener time to start
+	time.Sleep(200 * time.Millisecond)
+
+	// Run curl inside the sandbox targeting localhost:19999
+	result := runUnderSandboxWithTimeout(t, cfg,
+		"curl -s --connect-timeout 3 --max-time 5 http://localhost:19999",
+		workspace, 15*time.Second)
+
+	assertAllowed(t, result)
+	assertContains(t, result.Stdout, "FORWARD_OK")
+}
+
+// ============================================================================
 // Helper functions
 // ============================================================================
 

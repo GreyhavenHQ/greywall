@@ -236,14 +236,18 @@ func NewReverseBridge(ports []int, debug bool) (*ReverseBridge, error) {
 	}
 	socketID := hex.EncodeToString(id)
 
-	tmpDir := os.TempDir()
+	socketDir := filepath.Join(os.TempDir(), fmt.Sprintf("greywall-rev-%s", socketID))
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to create reverse bridge socket directory: %w", err)
+	}
+
 	bridge := &ReverseBridge{
 		Ports: ports,
 		debug: debug,
 	}
 
 	for _, port := range ports {
-		socketPath := filepath.Join(tmpDir, fmt.Sprintf("greywall-rev-%d-%s.sock", port, socketID))
+		socketPath := filepath.Join(socketDir, fmt.Sprintf("%d.sock", port))
 		bridge.SocketPaths = append(bridge.SocketPaths, socketPath)
 
 		// Start reverse bridge: TCP listen on host port -> Unix socket
@@ -280,13 +284,101 @@ func (b *ReverseBridge) Cleanup() {
 		}
 	}
 
-	// Clean up socket files
+	// Clean up socket files and directory
 	for _, socketPath := range b.SocketPaths {
 		_ = os.Remove(socketPath)
+	}
+	if len(b.SocketPaths) > 0 {
+		_ = os.Remove(filepath.Dir(b.SocketPaths[0]))
 	}
 
 	if b.debug {
 		fmt.Fprintf(os.Stderr, "[greywall:linux] Reverse bridges cleaned up\n")
+	}
+}
+
+// ForwardBridge bridges host localhost ports into the sandbox via Unix sockets.
+// Host side: socat listens on a Unix socket and forwards to localhost:PORT.
+// Sandbox side: socat listens on localhost:PORT and forwards through the Unix socket.
+type ForwardBridge struct {
+	Ports       []int
+	SocketPaths []string // Unix socket paths for each port
+	processes   []*exec.Cmd
+	debug       bool
+}
+
+// NewForwardBridge creates Unix socket bridges for outbound localhost connections.
+// Host listens on Unix sockets and forwards to localhost ports on the host.
+func NewForwardBridge(ports []int, debug bool) (*ForwardBridge, error) {
+	if len(ports) == 0 {
+		return nil, nil
+	}
+
+	if _, err := exec.LookPath("socat"); err != nil {
+		return nil, fmt.Errorf("socat is required on Linux but not found: %w", err)
+	}
+
+	id := make([]byte, 8)
+	if _, err := rand.Read(id); err != nil {
+		return nil, fmt.Errorf("failed to generate socket ID: %w", err)
+	}
+	socketID := hex.EncodeToString(id)
+
+	socketDir := filepath.Join(os.TempDir(), fmt.Sprintf("greywall-fwd-%s", socketID))
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to create forward bridge socket directory: %w", err)
+	}
+
+	bridge := &ForwardBridge{
+		Ports: ports,
+		debug: debug,
+	}
+
+	for _, port := range ports {
+		socketPath := filepath.Join(socketDir, fmt.Sprintf("%d.sock", port))
+		bridge.SocketPaths = append(bridge.SocketPaths, socketPath)
+
+		// Start forward bridge: Unix socket listen -> TCP connect to host localhost:port
+		args := []string{
+			fmt.Sprintf("UNIX-LISTEN:%s,fork,reuseaddr", socketPath),
+			fmt.Sprintf("TCP:127.0.0.1:%d", port),
+		}
+		proc := exec.Command("socat", args...) //nolint:gosec // args constructed from trusted input
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Starting forward bridge for port %d: socat %s\n", port, strings.Join(args, " "))
+		}
+		if err := proc.Start(); err != nil {
+			bridge.Cleanup()
+			return nil, fmt.Errorf("failed to start forward bridge for port %d: %w", port, err)
+		}
+		bridge.processes = append(bridge.processes, proc)
+	}
+
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Forward bridges ready for ports: %v\n", ports)
+	}
+
+	return bridge, nil
+}
+
+// Cleanup stops the forward bridge processes and removes socket files.
+func (b *ForwardBridge) Cleanup() {
+	for _, proc := range b.processes {
+		if proc != nil && proc.Process != nil {
+			_ = proc.Process.Kill()
+			_ = proc.Wait()
+		}
+	}
+
+	for _, socketPath := range b.SocketPaths {
+		_ = os.Remove(socketPath)
+	}
+	if len(b.SocketPaths) > 0 {
+		_ = os.Remove(filepath.Dir(b.SocketPaths[0]))
+	}
+
+	if b.debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Forward bridges cleaned up\n")
 	}
 }
 
@@ -734,8 +826,8 @@ func isSystemMountPoint(path string) bool {
 
 // WrapCommandLinux wraps a command with Linux bubblewrap sandbox.
 // It uses available security features (Landlock, seccomp) with graceful fallback.
-func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, dbusBridge *DbusBridge, tun2socksPath string, debug bool) (string, error) {
-	return WrapCommandLinuxWithOptions(cfg, command, proxyBridge, dnsBridge, reverseBridge, dbusBridge, tun2socksPath, LinuxSandboxOptions{
+func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, forwardBridge *ForwardBridge, dbusBridge *DbusBridge, tun2socksPath string, debug bool) (string, error) {
+	return WrapCommandLinuxWithOptions(cfg, command, proxyBridge, dnsBridge, reverseBridge, forwardBridge, dbusBridge, tun2socksPath, LinuxSandboxOptions{
 		UseLandlock: true, // Enabled by default, will fall back if not available
 		UseSeccomp:  true, // Enabled by default
 		UseEBPF:     true, // Enabled by default if available
@@ -744,7 +836,7 @@ func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBrid
 }
 
 // WrapCommandLinuxWithOptions wraps a command with configurable sandbox options.
-func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, dbusBridge *DbusBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
+func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, forwardBridge *ForwardBridge, dbusBridge *DbusBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		return "", fmt.Errorf("bubblewrap (bwrap) is required on Linux but not found: %w", err)
 	}
@@ -1090,11 +1182,27 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		}
 	}
 
-	// Bind reverse socket directory if needed (sockets created inside sandbox)
-	if reverseBridge != nil && len(reverseBridge.SocketPaths) > 0 {
-		// Get the temp directory containing the reverse sockets
-		tmpDir := filepath.Dir(reverseBridge.SocketPaths[0])
-		bwrapArgs = append(bwrapArgs, "--bind", tmpDir, tmpDir)
+	// Bind bridge socket directories into the sandbox.
+	// Bridges use unique subdirectories under /tmp (e.g. /tmp/greywall-rev-xxx/)
+	// so bind-mounting them doesn't overwrite --tmpfs /tmp (which would break tun2socks).
+	bridgeSocketDirs := make(map[string]bool)
+	if reverseBridge != nil {
+		for _, sp := range reverseBridge.SocketPaths {
+			dir := filepath.Dir(sp)
+			if !bridgeSocketDirs[dir] {
+				bridgeSocketDirs[dir] = true
+				bwrapArgs = append(bwrapArgs, "--bind", dir, dir)
+			}
+		}
+	}
+	if forwardBridge != nil {
+		for _, sp := range forwardBridge.SocketPaths {
+			dir := filepath.Dir(sp)
+			if !bridgeSocketDirs[dir] {
+				bridgeSocketDirs[dir] = true
+				bwrapArgs = append(bwrapArgs, "--bind", dir, dir)
+			}
+		}
 	}
 
 	// Get greywall executable path for Landlock wrapper
@@ -1207,6 +1315,21 @@ export no_proxy=localhost,127.0.0.1
 				socketPath, port,
 			)
 			fmt.Fprintf(&innerScript, "REV_%d_PID=$!\n", port)
+		}
+		innerScript.WriteString("\n")
+	}
+
+	// Set up forward (outbound localhost) socat listeners inside the sandbox
+	if forwardBridge != nil && len(forwardBridge.Ports) > 0 {
+		innerScript.WriteString("\n# Start forward bridge listeners for outbound localhost connections\n")
+		for i, port := range forwardBridge.Ports {
+			socketPath := forwardBridge.SocketPaths[i]
+			// Listen on localhost:port inside the sandbox, forward to Unix socket -> host localhost:port
+			fmt.Fprintf(&innerScript,
+				"socat TCP-LISTEN:%d,fork,reuseaddr,bind=127.0.0.1 UNIX-CONNECT:%s >/dev/null 2>&1 &\n",
+				port, socketPath,
+			)
+			fmt.Fprintf(&innerScript, "FWD_%d_PID=$!\n", port)
 		}
 		innerScript.WriteString("\n")
 	}
