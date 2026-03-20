@@ -466,6 +466,67 @@ func sameDevice(path1, path2 string) bool {
 	return s1.Dev == s2.Dev
 }
 
+// isSeparateMount returns true if path is on a different mount than its parent.
+// This detects separate mounts (e.g., /run as tmpfs) even when sameDevice
+// against / might be unreliable. Used to detect paths that won't be visible
+// after a non-recursive bind of /.
+func isSeparateMount(path string) bool {
+	parent := filepath.Dir(path)
+	if parent == path {
+		return false
+	}
+	var s1, s2 syscall.Stat_t
+	if syscall.Stat(parent, &s1) != nil || syscall.Stat(path, &s2) != nil {
+		return false
+	}
+	return s1.Dev != s2.Dev
+}
+
+// resolveSymlinkForBind checks if dest is a symlink whose target lives under
+// a separate mount point (e.g., /run as tmpfs). After a non-recursive
+// --ro-bind / /, such mounts are empty, so bwrap fails when it follows the
+// symlink to a nonexistent target ("Can't create file at ...").
+//
+// Returns extra bwrap args (--tmpfs, --dir, --ro-bind) to make the symlink
+// target reachable. Returns nil if dest is not a symlink or the target is on
+// the root mount.
+func resolveSymlinkForBind(dest string, debug bool) (extraArgs []string) {
+	target, err := filepath.EvalSymlinks(dest)
+	if err != nil || target == dest {
+		return nil
+	}
+
+	// Walk intermediary dirs to find a separate mount point.
+	targetDir := filepath.Dir(target)
+	dirs := intermediaryDirs("/", targetDir)
+	separateMountIdx := -1
+	for i, dir := range dirs {
+		if isSeparateMount(dir) {
+			separateMountIdx = i
+			break
+		}
+	}
+	if separateMountIdx < 0 {
+		return nil // target is on the root mount, should be reachable
+	}
+
+	// The mount point itself gets --tmpfs (it's an empty stub after
+	// non-recursive bind), deeper dirs get --dir.
+	for i := separateMountIdx; i < len(dirs); i++ {
+		if i == separateMountIdx {
+			extraArgs = append(extraArgs, "--tmpfs", dirs[i])
+		} else {
+			extraArgs = append(extraArgs, "--dir", dirs[i])
+		}
+	}
+	extraArgs = append(extraArgs, "--ro-bind", target, target)
+
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Resolved symlink %s -> %s (separate mount at %s)\n", dest, target, dirs[separateMountIdx])
+	}
+	return extraArgs
+}
+
 // intermediaryDirs returns the chain of directories between root and targetDir,
 // from shallowest to deepest. Used to create --dir entries so bwrap can set up
 // mount points inside otherwise-empty mount-point stubs.
@@ -860,55 +921,15 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	}
 
 	// Ensure /etc/resolv.conf is readable inside the sandbox.
-	// On some systems (e.g., WSL), /etc/resolv.conf is a symlink to a path
-	// on a separate mount point (e.g., /mnt/wsl/resolv.conf) that isn't
-	// reachable after --ro-bind / / (non-recursive bind). When the target
-	// is on a different filesystem, we create intermediate directories and
-	// bind the real file at its original location so the symlink resolves.
-	if target, err := filepath.EvalSymlinks("/etc/resolv.conf"); err == nil && target != "/etc/resolv.conf" {
-		// Skip targets under specially-mounted dirs — a --tmpfs there would
-		// overwrite the --dev-bind or --proc mounts established above.
-		targetUnderSpecialMount := strings.HasPrefix(target, "/dev/") ||
-			strings.HasPrefix(target, "/proc/") ||
-			strings.HasPrefix(target, "/tmp/")
-		// In defaultDenyRead mode, also skip if the target is under a path
-		// already individually bound (e.g., /run, /sys) — a --tmpfs would
-		// overwrite that explicit bind. Targets under unbound paths like
-		// /mnt/wsl still need the fix.
-		if defaultDenyRead {
-			for _, p := range GetDefaultReadablePaths() {
-				if strings.HasPrefix(target, p+"/") {
-					targetUnderSpecialMount = true
-					break
-				}
-			}
-		}
-		if fileExists(target) && !sameDevice("/", target) && !targetUnderSpecialMount {
-			// Make the symlink target reachable by creating its parent dirs.
-			// Walk down from / to the target's parent: skip dirs on the root
-			// device (they have real content like /mnt/c, /mnt/d on WSL),
-			// apply --tmpfs at the mount boundary (first dir on a different
-			// device — an empty mount-point stub safe to replace), then --dir
-			// for any deeper subdirectories inside the now-writable tmpfs.
-			targetDir := filepath.Dir(target)
-			mountBoundaryFound := false
-			for _, dir := range intermediaryDirs("/", targetDir) {
-				if !mountBoundaryFound {
-					if !sameDevice("/", dir) {
-						bwrapArgs = append(bwrapArgs, "--tmpfs", dir)
-						mountBoundaryFound = true
-					}
-					// skip dirs still on root device
-				} else {
-					bwrapArgs = append(bwrapArgs, "--dir", dir)
-				}
-			}
-			if mountBoundaryFound {
-				bwrapArgs = append(bwrapArgs, "--ro-bind", target, target)
-			}
-			if opts.Debug {
-				fmt.Fprintf(os.Stderr, "[greywall:linux] Resolved /etc/resolv.conf symlink -> %s (cross-mount)\n", target)
-			}
+	// On many systems, /etc/resolv.conf is a symlink (e.g., systemd-resolved
+	// points it to /run/systemd/resolve/stub-resolv.conf, WSL points it to
+	// /mnt/wsl/resolv.conf). After --ro-bind / / (non-recursive), separate
+	// mounts like /run are empty, so the symlink target is unreachable and
+	// bwrap fails with "Can't create file at /etc/resolv.conf".
+	if !defaultDenyRead {
+		// In defaultDenyRead mode, /run is already explicitly mounted.
+		if extra := resolveSymlinkForBind("/etc/resolv.conf", opts.Debug); len(extra) > 0 {
+			bwrapArgs = append(bwrapArgs, extra...)
 		}
 	}
 
@@ -1078,7 +1099,16 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 				}
 				_ = tmpResolv.Close()
 				dnsRelayResolvConf = tmpResolv.Name()
-				bwrapArgs = append(bwrapArgs, "--ro-bind", dnsRelayResolvConf, "/etc/resolv.conf")
+				// If /etc/resolv.conf is a symlink, bind to the resolved target
+				// path directly. bwrap follows symlinks when creating bind mount
+				// destinations, and the symlink target may not exist inside the
+				// sandbox (e.g., /run/systemd/resolve/stub-resolv.conf on a
+				// separate tmpfs mount). Binding to the resolved path avoids this.
+				resolvDest := "/etc/resolv.conf"
+				if resolved, err := filepath.EvalSymlinks(resolvDest); err == nil {
+					resolvDest = resolved
+				}
+				bwrapArgs = append(bwrapArgs, "--ro-bind", dnsRelayResolvConf, resolvDest)
 				if opts.Debug {
 					if dnsBridge != nil {
 						fmt.Fprintf(os.Stderr, "[greywall:linux] DNS: overriding resolv.conf -> 127.0.0.1 (bridge to %s)\n", dnsBridge.DnsAddr)
