@@ -20,8 +20,8 @@ func TestIsKnownAgent(t *testing.T) {
 	}{
 		{"claude", "claude"},
 		{"claude-code", "claude"},
-		{"Claude", "claude"},       // macOS desktop app (capital C)
-		{"Claude-Code", "claude"},  // case-insensitive match
+		{"Claude", "claude"},      // macOS desktop app (capital C)
+		{"Claude-Code", "claude"}, // case-insensitive match
 		{"cursor", "cursor"},
 		{"cursor-agent", "cursor"},
 		{"kilocode", "kilo"},
