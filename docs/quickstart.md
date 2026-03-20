@@ -23,16 +23,16 @@ On Linux, you also need:
 
 ```bash
 # Ubuntu/Debian
-sudo apt install bubblewrap socat xdg-dbus-proxy
+sudo apt install bubblewrap socat xdg-dbus-proxy libsecret-tools
 
 # Fedora
-sudo dnf install bubblewrap socat xdg-dbus-proxy
+sudo dnf install bubblewrap socat xdg-dbus-proxy libsecret
 
 # Arch
-sudo pacman -S bubblewrap socat xdg-dbus-proxy
+sudo pacman -S bubblewrap socat xdg-dbus-proxy libsecret
 ```
 
-`xdg-dbus-proxy` is optional but recommended. It enables `notify-send` inside the sandbox while keeping the D-Bus session bus isolated.
+`xdg-dbus-proxy` is optional but recommended (enables `notify-send` inside the sandbox). `libsecret-tools` provides `secret-tool` for injecting keyring credentials (e.g., gh OAuth token) into the sandbox.
 
 ### Do I need sudo to run greywall?
 

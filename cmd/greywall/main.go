@@ -363,6 +363,30 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Inject keyring secrets for active profiles (Linux only).
+	// This reads from the host keyring before sandboxing blocks D-Bus access.
+	// Check the command itself and any explicitly loaded profiles.
+	if !learning {
+		profileNames := []string{cmdName}
+		if profileName != "" {
+			for _, name := range strings.Split(profileName, ",") {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					profileNames = append(profileNames, name)
+				}
+			}
+		}
+		for _, name := range profileNames {
+			canonical := profiles.IsKnownAgent(name)
+			if canonical == "" {
+				continue
+			}
+			if secrets := profiles.GetKeyringSecrets(canonical); secrets != nil {
+				hardenedEnv = append(hardenedEnv, profiles.ResolveKeyringSecrets(secrets, debug)...)
+			}
+		}
+	}
+
 	execCmd := exec.Command("sh", "-c", sandboxedCommand) //nolint:gosec // sandboxedCommand is constructed from user input - intentional
 	execCmd.Env = hardenedEnv
 	execCmd.Stdin = os.Stdin

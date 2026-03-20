@@ -7,6 +7,14 @@ import (
 	"github.com/GreyhavenHQ/greywall/internal/config"
 )
 
+// KeyringLookup defines how to retrieve a secret from the system keyring.
+// On Linux, this uses secret-tool to read from gnome-keyring via libsecret.
+type KeyringLookup struct {
+	// Service is the attribute value for "service" passed to secret-tool lookup.
+	// Example: "gh:github.com" retrieves the GitHub CLI OAuth token.
+	Service string
+}
+
 // AgentDef is everything needed to define a known agent or toolchain profile.
 // Each file in the agents/ subpackage creates one of these and passes it to
 // Register() via an init() function, so adding a new entry is a single
@@ -24,6 +32,13 @@ type AgentDef struct {
 	// Overlay returns the profile-specific config. For agents this is merged
 	// on top of BaseProfile(); for toolchains it is used as-is.
 	Overlay func() *config.Config
+
+	// KeyringSecrets maps environment variable names to keyring lookups.
+	// On Linux, greywall reads these from the host keyring at startup (before
+	// sandboxing) and injects them as environment variables. This avoids
+	// exposing the D-Bus session bus (and gnome-keyring) inside the sandbox.
+	// Ignored on macOS (keychain is accessible via file-based access).
+	KeyringSecrets map[string]KeyringLookup
 }
 
 var registry []AgentDef
@@ -82,6 +97,17 @@ func AvailableAgents() []string {
 	}
 	sort.Strings(agents)
 	return agents
+}
+
+// GetKeyringSecrets returns all keyring secret mappings for the given canonical name.
+// Returns nil if the profile has no keyring secrets.
+func GetKeyringSecrets(canonical string) map[string]KeyringLookup {
+	for _, def := range registry {
+		if def.Names[0] == canonical && len(def.KeyringSecrets) > 0 {
+			return def.KeyringSecrets
+		}
+	}
+	return nil
 }
 
 // AdHocCommands is the set of basic unix utilities that should not trigger

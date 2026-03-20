@@ -86,6 +86,7 @@ jobs:
             bubblewrap \
             socat \
             xdg-dbus-proxy \
+            libsecret-tools \
             uidmap \
             curl \
             netcat-openbsd \

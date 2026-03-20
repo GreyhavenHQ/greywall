@@ -78,6 +78,7 @@ make setup && make build
 - `bubblewrap` - container-free sandboxing (required)
 - `socat` - network bridging (required)
 - `xdg-dbus-proxy` - filtered D-Bus proxy for notify-send support (optional)
+- `libsecret-tools` - keyring credential injection for gh/glab (optional)
 
 Check dependency status with `greywall check`.
 

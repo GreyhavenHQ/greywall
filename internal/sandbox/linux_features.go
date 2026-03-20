@@ -330,6 +330,12 @@ func PrintDependencyStatus() []string {
 		fmt.Println(CheckFail("xdg-dbus-proxy — optional, enables notify-send inside sandbox"))
 		steps = append(steps, suggestInstallDbusProxy())
 	}
+	if commandExists("secret-tool") {
+		fmt.Println(CheckOK("secret-tool (keyring credential injection for gh/glab)"))
+	} else {
+		fmt.Println(CheckFail("secret-tool — optional, injects keyring credentials (gh, glab) into sandbox"))
+		steps = append(steps, suggestInstallSecretTool())
+	}
 
 	// Network isolation (transparent proxy via tun2socks + network namespace)
 	if features.CanUseTransparentProxy() {
@@ -408,6 +414,25 @@ func suggestInstallDbusProxy() string {
 		return "sudo zypper install xdg-dbus-proxy"
 	default:
 		return "install xdg-dbus-proxy using your package manager"
+	}
+}
+
+func suggestInstallSecretTool() string {
+	switch {
+	case commandExists("apt-get"):
+		return "sudo apt install libsecret-tools"
+	case commandExists("dnf"):
+		return "sudo dnf install libsecret"
+	case commandExists("yum"):
+		return "sudo yum install libsecret"
+	case commandExists("pacman"):
+		return "sudo pacman -S libsecret"
+	case commandExists("apk"):
+		return "sudo apk add libsecret-tools"
+	case commandExists("zypper"):
+		return "sudo zypper install libsecret-tools"
+	default:
+		return "install libsecret-tools (provides secret-tool) using your package manager"
 	}
 }
 

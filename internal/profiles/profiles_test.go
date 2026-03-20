@@ -83,10 +83,14 @@ func TestGetAgentProfile(t *testing.T) {
 		}
 
 		if profiles.IsToolchain(name) {
-			// Toolchain profiles should NOT have base paths
-			for _, p := range profile.Filesystem.AllowRead {
-				if p == "~/.gitconfig" {
-					t.Errorf("toolchain %q should not have base path ~/.gitconfig", name)
+			// Toolchain profiles should NOT have base paths inherited from BaseProfile.
+			// However, toolchains like gh/glab may explicitly include paths they need
+			// (e.g., ~/.gitconfig) in their own overlay, which is fine.
+			if name != "gh" && name != "glab" {
+				for _, p := range profile.Filesystem.AllowRead {
+					if p == "~/.gitconfig" {
+						t.Errorf("toolchain %q should not have base path ~/.gitconfig", name)
+					}
 				}
 			}
 		} else {
