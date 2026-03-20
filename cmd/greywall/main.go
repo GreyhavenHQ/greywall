@@ -230,18 +230,6 @@ func runCommand(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to load saved profile: %v\n", loadErr)
 				}
 			case savedCfg != nil:
-				// For known agents, merge the built-in profile first as a
-				// baseline so essential paths (e.g. ~/.claude for Claude Code)
-				// are always present even when a saved/learned profile exists.
-				canonical := profiles.IsKnownAgent(cmdName)
-				if canonical != "" {
-					if builtIn := profiles.GetAgentProfile(canonical); builtIn != nil {
-						cfg = config.Merge(cfg, builtIn)
-						if debug {
-							fmt.Fprintf(os.Stderr, "[greywall] Applied built-in baseline profile for %q\n", canonical)
-						}
-					}
-				}
 				cfg = config.Merge(cfg, savedCfg)
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall] Auto-loaded saved profile for %q\n", cmdName)
@@ -495,18 +483,6 @@ func resolveProfile(name string, debug bool) (*config.Config, error) {
 		}
 	}
 	if savedCfg != nil {
-		// For known agents, merge the built-in profile as a baseline so
-		// essential paths are always present even when a saved/learned
-		// profile exists (e.g. Desktop-learned profile missing CLI paths).
-		canonical := profiles.IsKnownAgent(name)
-		if canonical != "" {
-			if builtIn := profiles.GetAgentProfile(canonical); builtIn != nil {
-				savedCfg = config.Merge(builtIn, savedCfg)
-				if debug {
-					fmt.Fprintf(os.Stderr, "[greywall] Merged built-in baseline for %q with saved profile\n", canonical)
-				}
-			}
-		}
 		if debug {
 			fmt.Fprintf(os.Stderr, "[greywall] Loaded saved profile for %q\n", name)
 		}
