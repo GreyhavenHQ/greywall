@@ -457,18 +457,8 @@ func canMountOver(path string) bool {
 	return fileExists(path)
 }
 
-// sameDevice returns true if both paths reside on the same filesystem (device).
-func sameDevice(path1, path2 string) bool {
-	var s1, s2 syscall.Stat_t
-	if syscall.Stat(path1, &s1) != nil || syscall.Stat(path2, &s2) != nil {
-		return true // err on the side of caution
-	}
-	return s1.Dev == s2.Dev
-}
-
 // isSeparateMount returns true if path is on a different mount than its parent.
-// This detects separate mounts (e.g., /run as tmpfs) even when sameDevice
-// against / might be unreliable. Used to detect paths that won't be visible
+// This detects separate mounts (e.g., /run as tmpfs) that won't be visible
 // after a non-recursive bind of /.
 func isSeparateMount(path string) bool {
 	parent := filepath.Dir(path)
