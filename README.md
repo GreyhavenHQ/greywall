@@ -2,7 +2,7 @@
 
 Greywall wraps commands in a deny-by-default sandbox. Filesystem access is restricted to the current directory by default. Use `--learning` to trace what else a command needs and auto-generate a config profile. All network traffic is transparently redirected through [greyproxy](https://github.com/GreyhavenHQ/greyproxy), a deny-by-default transparent proxy with a live allow/deny dashboard. Run `greywall setup` to install greyproxy automatically.
 
-*Supports Linux and macOS. See [platform support](docs/platform-support.md) for details.*
+*Supports Linux and macOS. See [platform support](https://docs.greywall.io/greywall/platform-support) for details.*
 
 https://github.com/user-attachments/assets/7d62d45d-a201-4f24-9138-b460e4c157a8
 
@@ -200,24 +200,25 @@ By default, traffic routes through the GreyProxy SOCKS5 proxy at `localhost:4305
 | **PTY support** | ✅ | ✅ |
 | **External deps** | bwrap, socat | none |
 
-See [platform support](docs/platform-support.md) for more details.
+See [platform support](https://docs.greywall.io/greywall/platform-support) for more details.
 
-Greywall can also be used as a [Go package](docs/library.md).
+Greywall can also be used as a [Go package](https://docs.greywall.io/greywall/library).
 
 ## Documentation
 
-- [Documentation Index](docs/README.md)
-- [Quickstart Guide](docs/quickstart.md)
-- [Why Greywall](docs/why-greywall.md)
-- [Configuration Reference](docs/configuration.md)
-- [Learning Mode](docs/learning.md)
-- [Security Model](docs/security-model.md)
-- [Architecture](ARCHITECTURE.md)
-- [Platform Support](docs/platform-support.md)
-- [Linux Security Features](docs/linux-security-features.md)
-- [AI Agent Integration](docs/agents.md)
-- [Library Usage (Go)](docs/library.md)
-- [Troubleshooting](docs/troubleshooting.md)
+Full documentation is available at **https://docs.greywall.io/greywall**.
+
+- [Quickstart Guide](https://docs.greywall.io/greywall/quickstart)
+- [Why Greywall](https://docs.greywall.io/greywall/why-greywall)
+- [Configuration Reference](https://docs.greywall.io/greywall/configuration)
+- [Learning Mode](https://docs.greywall.io/greywall/learning)
+- [Security Model](https://docs.greywall.io/greywall/security-model)
+- [Architecture](https://docs.greywall.io/greywall/architecture)
+- [Platform Support](https://docs.greywall.io/greywall/platform-support)
+- [Linux Security Features](https://docs.greywall.io/greywall/linux-security-features)
+- [AI Agent Integration](https://docs.greywall.io/greywall/agents)
+- [Library Usage (Go)](https://docs.greywall.io/greywall/library)
+- [Troubleshooting](https://docs.greywall.io/greywall/troubleshooting)
 
 ## Attribution
 
