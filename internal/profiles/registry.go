@@ -3,6 +3,7 @@ package profiles
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
 )
@@ -50,11 +51,13 @@ func Register(def AgentDef) {
 }
 
 // IsKnownAgent returns the canonical agent name if cmd matches a registered
-// agent, or empty string if not.
+// agent, or empty string if not. Matching is case-insensitive so that
+// "Claude" (macOS desktop app) resolves to the same profile as "claude" (CLI).
 func IsKnownAgent(cmd string) string {
+	lower := strings.ToLower(cmd)
 	for _, def := range registry {
 		for _, name := range def.Names {
-			if name == cmd {
+			if strings.ToLower(name) == lower {
 				return def.Names[0]
 			}
 		}
