@@ -509,22 +509,28 @@ func resolveProfile(name string, debug bool) (*config.Config, error) {
 // For -c "opencode --foo", returns "opencode".
 // Strips path prefixes (e.g., /usr/bin/opencode -> opencode).
 func extractCommandName(args []string, cmdStr string) string {
-	var name string
+	var fullPath string
 	switch {
 	case len(args) > 0:
-		name = args[0]
+		fullPath = args[0]
 	case cmdStr != "":
 		// Take first token from the command string
 		parts := strings.Fields(cmdStr)
 		if len(parts) > 0 {
-			name = parts[0]
+			fullPath = parts[0]
 		}
 	}
-	if name == "" {
+	if fullPath == "" {
 		return ""
 	}
+	// Detect macOS app bundles: /path/to/Foo.app/Contents/MacOS/Bar → "Foo.app"
+	// This prevents the desktop app from colliding with a CLI tool of the
+	// same name (e.g. "Claude.app" vs "claude").
+	if idx := strings.Index(fullPath, ".app/Contents/MacOS/"); idx >= 0 {
+		return filepath.Base(fullPath[:idx+4]) // include ".app"
+	}
 	// Strip path prefix
-	return filepath.Base(name)
+	return filepath.Base(fullPath)
 }
 
 // newCheckCmd creates the check subcommand for diagnostics.
