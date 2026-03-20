@@ -89,6 +89,7 @@ homebrew_casks:
       owner: GreyhavenHQ
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    skip_upload: auto
     homepage: "https://github.com/GreyhavenHQ/greywall"
     description: "Sandboxed command execution with network isolation"
     license: "Apache-2.0"

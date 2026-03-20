@@ -454,6 +454,7 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
   (global-name "com.apple.system.logger")
   (global-name "com.apple.system.notification_center")
   (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.TrustEvaluationAgent")
   (global-name "com.apple.system.opendirectoryd.libinfo")
   (global-name "com.apple.system.opendirectoryd.membership")
   (global-name "com.apple.bsd.dirhelper")

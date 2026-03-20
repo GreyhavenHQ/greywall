@@ -22,6 +22,9 @@ func TestSanitizeTemplateName(t *testing.T) {
 		{"my@app!v2", "my_app_v2"},
 		{"", "unknown"},
 		{"///", "unknown"},
+		// Case normalization: prevents macOS case-insensitive FS collisions
+		{"Claude", "claude"},
+		{"MyApp", "myapp"},
 	}
 
 	for _, tt := range tests {

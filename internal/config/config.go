@@ -33,6 +33,7 @@ type NetworkConfig struct {
 	AllowAllUnixSockets bool     `json:"allowAllUnixSockets,omitempty"`
 	AllowLocalBinding   bool     `json:"allowLocalBinding,omitempty"`
 	AllowLocalOutbound  *bool    `json:"allowLocalOutbound,omitempty"` // If nil, defaults to AllowLocalBinding value
+	ForwardPorts        []int    `json:"forwardPorts,omitempty"`       // Host localhost ports to forward into sandbox
 }
 
 // FilesystemConfig defines filesystem restrictions.
@@ -445,6 +446,9 @@ func Merge(base, override *Config) *Config {
 
 			// Pointer fields: override wins if set, otherwise base
 			AllowLocalOutbound: mergeOptionalBool(base.Network.AllowLocalOutbound, override.Network.AllowLocalOutbound),
+
+			// Append slices
+			ForwardPorts: mergeIntSlice(base.Network.ForwardPorts, override.Network.ForwardPorts),
 		},
 
 		Filesystem: FilesystemConfig{
@@ -508,6 +512,33 @@ func mergeStrings(base, override []string) []string {
 		if !seen[s] {
 			seen[s] = true
 			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// mergeIntSlice appends two int slices, removing duplicates.
+func mergeIntSlice(base, override []int) []int {
+	if len(base) == 0 {
+		return override
+	}
+	if len(override) == 0 {
+		return base
+	}
+
+	seen := make(map[int]bool, len(base))
+	result := make([]int, 0, len(base)+len(override))
+
+	for _, v := range base {
+		if !seen[v] {
+			seen[v] = true
+			result = append(result, v)
+		}
+	}
+	for _, v := range override {
+		if !seen[v] {
+			seen[v] = true
+			result = append(result, v)
 		}
 	}
 	return result

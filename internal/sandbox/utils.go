@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -97,7 +98,35 @@ func GenerateProxyEnvVars(proxyURL, httpProxyURL string) []string {
 		)
 	}
 
+	// Set NODE_EXTRA_CA_CERTS so Node.js apps trust the MITM CA certificate.
+	// Node.js uses its own compiled-in CA bundle and ignores the OS keychain.
+	if certPath := greyproxyCACertPath(); certPath != "" {
+		envVars = append(envVars, "NODE_EXTRA_CA_CERTS="+certPath)
+	}
+
 	return envVars
+}
+
+// greyproxyCACertPath returns the path to the greyproxy CA certificate if it exists.
+func greyproxyCACertPath() string {
+	var dataHome string
+	if runtime.GOOS == "darwin" {
+		home, _ := os.UserHomeDir()
+		dataHome = filepath.Join(home, "Library", "Application Support", "greyproxy")
+	} else {
+		// XDG_DATA_HOME or default
+		if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+			dataHome = filepath.Join(xdg, "greyproxy")
+		} else {
+			home, _ := os.UserHomeDir()
+			dataHome = filepath.Join(home, ".local", "share", "greyproxy")
+		}
+	}
+	certPath := filepath.Clean(filepath.Join(dataHome, "ca-cert.pem"))
+	if _, err := os.Stat(certPath); err == nil { //nolint:gosec // path is constructed from trusted sources (home dir + constant)
+		return certPath
+	}
+	return ""
 }
 
 // EncodeSandboxedCommand encodes a command for sandbox monitoring.

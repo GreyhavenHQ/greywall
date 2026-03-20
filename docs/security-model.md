@@ -43,6 +43,10 @@ Localhost is separate from external traffic:
 - **denyRead** can block reads from specific paths even within allowed areas.
 - Greywall includes an internal list of always-protected targets (e.g. shell configs, git hooks, `.env` files) to reduce common persistence vectors.
 
+### D-Bus isolation (Linux)
+
+The D-Bus session bus is blocked inside the sandbox. Without this, a sandboxed process can use the host's GVFS daemon to read arbitrary files, access gnome-keyring passwords, or launch processes outside the sandbox. Greywall overlays `/run/user` with a tmpfs, blocking all user session sockets (D-Bus, Wayland, PipeWire, SSH agent, GPG agent). SSH/GPG agent sockets can be selectively re-added via `allowRead` if needed, though this grants the sandbox the ability to authenticate under your identity.
+
 ### Environment sanitization
 
 Greywall strips dangerous environment variables before passing them to sandboxed commands:

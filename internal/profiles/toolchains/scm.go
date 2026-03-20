@@ -13,6 +13,7 @@ func init() {
 			return &config.Config{
 				Filesystem: config.FilesystemConfig{
 					AllowRead: []string{
+						"~/.gitconfig", "~/.gitignore", "~/.config/git",
 						"~/.config/gh", "~/.cache/gh", "~/.local/share/gh", "~/.local/state/gh",
 						"~/.config/glab-cli", "~/.cache/glab-cli", "~/.local/share/glab-cli", "~/.local/state/glab-cli",
 					},
@@ -22,6 +23,12 @@ func init() {
 					},
 				},
 			}
+		},
+		// On Linux, gh stores its OAuth token in gnome-keyring via libsecret.
+		// The D-Bus session bus (and thus the keyring) is blocked inside the sandbox.
+		// Read the token on the host via secret-tool and inject it as GH_TOKEN.
+		KeyringSecrets: map[string]profiles.KeyringLookup{
+			"GH_TOKEN": {Service: "gh:github.com"},
 		},
 	})
 }

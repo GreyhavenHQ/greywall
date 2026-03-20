@@ -85,6 +85,8 @@ jobs:
           sudo apt-get install -y \
             bubblewrap \
             socat \
+            xdg-dbus-proxy \
+            libsecret-tools \
             uidmap \
             curl \
             netcat-openbsd \

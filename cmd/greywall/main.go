@@ -39,6 +39,7 @@ var (
 	dnsAddr       string
 	cmdString     string
 	exposePorts   []string
+	forwardPorts  []string
 	exitCode      int
 	showVersion   bool
 	linuxFeatures bool
@@ -79,6 +80,7 @@ Examples:
   greywall -c "echo hello && ls"                                # Run with shell expansion
   greywall --settings config.json npm install
   greywall -p 3000 -c "npm run dev"                             # Expose port 3000
+  greywall -f 5432 -- psql -h localhost                          # Forward host port into sandbox
   greywall --learning -- opencode                                # Learn filesystem needs
 
 Configuration file format:
@@ -109,6 +111,7 @@ Configuration file format:
 	rootCmd.Flags().StringVar(&httpProxyURL, "http-proxy", "", "HTTP CONNECT proxy URL (default: http://localhost:43051)")
 	rootCmd.Flags().StringVarP(&cmdString, "c", "c", "", "Run command string directly (like sh -c)")
 	rootCmd.Flags().StringArrayVarP(&exposePorts, "port", "p", nil, "Expose port for inbound connections (can be used multiple times)")
+	rootCmd.Flags().StringArrayVarP(&forwardPorts, "forward", "f", nil, "Forward host localhost port into sandbox (can be used multiple times)")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Show version information")
 	rootCmd.Flags().BoolVar(&linuxFeatures, "linux-features", false, "Show available Linux security features and exit")
 	rootCmd.Flags().BoolVar(&learning, "learning", false, "Run in learning mode: trace filesystem access and generate a config profile")
@@ -173,6 +176,19 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 	if debug && len(ports) > 0 {
 		fmt.Fprintf(os.Stderr, "[greywall] Exposing ports: %v\n", ports)
+	}
+
+	var fwdPorts []int
+	for _, p := range forwardPorts {
+		port, err := strconv.Atoi(p)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("invalid forward port: %s", p)
+		}
+		fwdPorts = append(fwdPorts, port)
+	}
+
+	if debug && len(fwdPorts) > 0 {
+		fmt.Fprintf(os.Stderr, "[greywall] Forwarding host ports: %v\n", fwdPorts)
 	}
 
 	// Load config: settings file > default path > default config
@@ -313,6 +329,11 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy credentials to %q:proxy\n", proxyUser)
 	}
 
+	// Merge CLI forward ports into config
+	if len(fwdPorts) > 0 {
+		cfg.Network.ForwardPorts = append(cfg.Network.ForwardPorts, fwdPorts...)
+	}
+
 	// Learning mode setup
 	if learning {
 		if err := sandbox.CheckLearningAvailable(); err != nil {
@@ -360,6 +381,30 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	if debug {
 		if stripped := sandbox.GetStrippedEnvVars(os.Environ()); len(stripped) > 0 {
 			fmt.Fprintf(os.Stderr, "[greywall] Stripped dangerous env vars: %v\n", stripped)
+		}
+	}
+
+	// Inject keyring secrets for active profiles (Linux only).
+	// This reads from the host keyring before sandboxing blocks D-Bus access.
+	// Check the command itself and any explicitly loaded profiles.
+	if !learning {
+		profileNames := []string{cmdName}
+		if profileName != "" {
+			for _, name := range strings.Split(profileName, ",") {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					profileNames = append(profileNames, name)
+				}
+			}
+		}
+		for _, name := range profileNames {
+			canonical := profiles.IsKnownAgent(name)
+			if canonical == "" {
+				continue
+			}
+			if secrets := profiles.GetKeyringSecrets(canonical); secrets != nil {
+				hardenedEnv = append(hardenedEnv, profiles.ResolveKeyringSecrets(secrets, debug)...)
+			}
 		}
 	}
 
@@ -485,22 +530,28 @@ func resolveProfile(name string, debug bool) (*config.Config, error) {
 // For -c "opencode --foo", returns "opencode".
 // Strips path prefixes (e.g., /usr/bin/opencode -> opencode).
 func extractCommandName(args []string, cmdStr string) string {
-	var name string
+	var fullPath string
 	switch {
 	case len(args) > 0:
-		name = args[0]
+		fullPath = args[0]
 	case cmdStr != "":
 		// Take first token from the command string
 		parts := strings.Fields(cmdStr)
 		if len(parts) > 0 {
-			name = parts[0]
+			fullPath = parts[0]
 		}
 	}
-	if name == "" {
+	if fullPath == "" {
 		return ""
 	}
+	// Detect macOS app bundles: /path/to/Foo.app/Contents/MacOS/Bar → "Foo.app"
+	// This prevents the desktop app from colliding with a CLI tool of the
+	// same name (e.g. "Claude.app" vs "claude").
+	if idx := strings.Index(fullPath, ".app/Contents/MacOS/"); idx >= 0 {
+		return filepath.Base(fullPath[:idx+4]) // include ".app"
+	}
 	// Strip path prefix
-	return filepath.Base(name)
+	return filepath.Base(fullPath)
 }
 
 // newCheckCmd creates the check subcommand for diagnostics.

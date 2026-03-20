@@ -312,6 +312,31 @@ func PrintDependencyStatus() []string {
 		fmt.Println(CheckFail("landlock"))
 	}
 
+	// D-Bus session bus isolation
+	dbusSocketPath := fmt.Sprintf("/run/user/%d/bus", os.Getuid())
+	hasDbusProxy := commandExists("xdg-dbus-proxy")
+	if fileExists(dbusSocketPath) {
+		if hasDbusProxy {
+			fmt.Println(CheckOK("D-Bus isolated (notify-send proxied via xdg-dbus-proxy)"))
+		} else {
+			fmt.Println(CheckOK("D-Bus isolated (notify-send will not work)"))
+		}
+	} else {
+		fmt.Println(CheckOK("D-Bus isolated (no host socket found)"))
+	}
+	if hasDbusProxy {
+		fmt.Println(CheckOK("xdg-dbus-proxy"))
+	} else {
+		fmt.Println(CheckFail("xdg-dbus-proxy — optional, enables notify-send inside sandbox"))
+		steps = append(steps, suggestInstallDbusProxy())
+	}
+	if commandExists("secret-tool") {
+		fmt.Println(CheckOK("secret-tool (keyring credential injection for gh/glab)"))
+	} else {
+		fmt.Println(CheckFail("secret-tool — optional, injects keyring credentials (gh, glab) into sandbox"))
+		steps = append(steps, suggestInstallSecretTool())
+	}
+
 	// Network isolation (transparent proxy via tun2socks + network namespace)
 	if features.CanUseTransparentProxy() {
 		fmt.Println(CheckOK("network isolation"))
@@ -370,6 +395,44 @@ func suggestInstallCmd(features *LinuxFeatures) string {
 		return fmt.Sprintf("sudo zypper install %s", pkgs)
 	default:
 		return fmt.Sprintf("install %s using your package manager", pkgs)
+	}
+}
+
+func suggestInstallDbusProxy() string {
+	switch {
+	case commandExists("apt-get"):
+		return "sudo apt install xdg-dbus-proxy"
+	case commandExists("dnf"):
+		return "sudo dnf install xdg-dbus-proxy"
+	case commandExists("yum"):
+		return "sudo yum install xdg-dbus-proxy"
+	case commandExists("pacman"):
+		return "sudo pacman -S xdg-dbus-proxy"
+	case commandExists("apk"):
+		return "sudo apk add xdg-dbus-proxy"
+	case commandExists("zypper"):
+		return "sudo zypper install xdg-dbus-proxy"
+	default:
+		return "install xdg-dbus-proxy using your package manager"
+	}
+}
+
+func suggestInstallSecretTool() string {
+	switch {
+	case commandExists("apt-get"):
+		return "sudo apt install libsecret-tools"
+	case commandExists("dnf"):
+		return "sudo dnf install libsecret"
+	case commandExists("yum"):
+		return "sudo yum install libsecret"
+	case commandExists("pacman"):
+		return "sudo pacman -S libsecret"
+	case commandExists("apk"):
+		return "sudo apk add libsecret-tools"
+	case commandExists("zypper"):
+		return "sudo zypper install libsecret-tools"
+	default:
+		return "install libsecret-tools (provides secret-tool) using your package manager"
 	}
 }
 

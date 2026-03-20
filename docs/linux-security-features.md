@@ -9,7 +9,8 @@ Greywall uses multiple layers of security on Linux, with graceful fallback when 
 | 1 | **bubblewrap (bwrap)** | Namespace isolation | 3.8+ |
 | 2 | **seccomp** | Syscall filtering | 3.5+ (logging: 4.14+) |
 | 3 | **Landlock** | Filesystem access control | 5.13+ |
-| 4 | **eBPF monitoring** | Violation visibility | 4.15+ (requires CAP_BPF) |
+| 4 | **D-Bus isolation** | Block session bus escape | N/A (always active) |
+| 5 | **eBPF monitoring** | Violation visibility | 4.15+ (requires CAP_BPF) |
 
 ## Feature Detection
 
@@ -91,6 +92,58 @@ This provides **defense-in-depth**: both bwrap mounts AND Landlock kernel restri
 - **Impact**: Cannot run greywall on Linux
 - **Solution**: Install socat: `apt install socat` or `dnf install socat`
 
+## D-Bus Session Bus Isolation
+
+The D-Bus session bus at `/run/user/<uid>/bus` is a significant escape vector. A sandboxed process that can connect to the host's D-Bus session bus can:
+
+- **Read arbitrary host files** via GVFS (`gio cat localtest:///path/to/secret`)
+- **Read stored passwords** via gnome-keyring (`org.freedesktop.secrets`)
+- **Launch processes outside the sandbox** via the Flatpak portal
+- **Access documents** via the Document portal
+
+Read-only bind mounts do not prevent `connect()` on Unix domain sockets, and Landlock (up to ABI v5) does not restrict Unix socket connections either. This means that simply mounting `/run` read-only is insufficient.
+
+Greywall blocks the D-Bus session bus by overlaying `/run/user` with a tmpfs:
+
+```
+--ro-bind /run /run    # System /run paths (DNS, systemd)
+--tmpfs /run/user      # Hide D-Bus socket, GVFS, Wayland, PipeWire, and all session sockets
+```
+
+This is always active in all sandbox modes (deny-by-default, legacy, and learning).
+
+### What breaks with D-Bus isolation
+
+- `notify-send` - works if `xdg-dbus-proxy` is installed (only `org.freedesktop.Notifications` is allowed); blocked otherwise
+- 1Password CLI (uses D-Bus for IPC)
+- Git over SSH (SSH agent socket is under `/run/user/`; use HTTPS or add `allowRead` for the socket)
+- GPG commit signing (GPG agent socket is under `/run/user/`; add `allowRead` if needed)
+- Wayland/PipeWire access (display server, audio; not needed for CLI tools)
+
+### What still works
+
+- DNS resolution (uses UDP via network bridge, not `/run` files)
+- Network requests (go through proxy)
+- Git over HTTPS (uses network proxy)
+- All CLI tools (git, npm, cargo, go, python, etc.)
+
+### Re-enabling SSH/GPG agent access
+
+If your workflow requires git-over-SSH or GPG commit signing, add the agent socket paths to `allowRead` in your greywall config:
+
+```json
+{
+  "filesystem": {
+    "allowRead": [
+      "/run/user/1000/ssh-agent.socket",
+      "/run/user/1000/gnupg"
+    ]
+  }
+}
+```
+
+Note that exposing the SSH agent socket allows the sandboxed process to authenticate to any SSH server your keys have access to. The GPG agent socket allows signing operations with your GPG keys. Neither provides a filesystem escape vector, but both grant the sandboxed process the ability to act under your identity for SSH/GPG operations.
+
 ## Blocked Syscalls (seccomp)
 
 Greywall blocks dangerous syscalls that could be used for sandbox escape or privilege escalation:
@@ -155,26 +208,28 @@ On Linux, violation monitoring (`greywall -m`) shows:
 ### Debian/Ubuntu
 
 ```bash
-sudo apt install bubblewrap socat
+sudo apt install bubblewrap socat xdg-dbus-proxy
 ```
 
 ### Fedora/RHEL
 
 ```bash
-sudo dnf install bubblewrap socat
+sudo dnf install bubblewrap socat xdg-dbus-proxy
 ```
 
 ### Arch Linux
 
 ```bash
-sudo pacman -S bubblewrap socat
+sudo pacman -S bubblewrap socat xdg-dbus-proxy
 ```
 
 ### Alpine Linux
 
 ```bash
-sudo apk add bubblewrap socat
+sudo apk add bubblewrap socat xdg-dbus-proxy
 ```
+
+`xdg-dbus-proxy` is optional but recommended. Without it, `notify-send` will not work inside the sandbox.
 
 ## Enabling eBPF Monitoring
 

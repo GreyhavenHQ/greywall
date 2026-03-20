@@ -19,7 +19,7 @@ Greywall supports Linux and macOS with platform-specific sandboxing technologies
 | **Environment sanitization** | ✅ | ✅ |
 | **Learning mode** | ✅ (strace) | ✅ (eslogger, requires sudo) |
 | **PTY support** | ✅ | ✅ |
-| **External deps** | bwrap, socat | none |
+| **External deps** | bwrap, socat, xdg-dbus-proxy (optional) | none |
 
 ## Linux
 
@@ -27,13 +27,14 @@ Greywall uses [bubblewrap](https://github.com/containers/bubblewrap) for contain
 
 - **seccomp** — BPF-based syscall filtering to block dangerous syscalls
 - **Landlock** — kernel filesystem access control (Linux 5.13+), restricts file operations independently of bubblewrap mount rules
+- **D-Bus isolation** — blocks the session bus to prevent sandbox escape via GVFS file reads, gnome-keyring password access, and Flatpak portal process launch
 - **eBPF** — real-time violation monitoring for blocked syscalls and file access attempts
 - **Network namespace** — full network isolation via `unshare-net`; all traffic flows through tun2socks into the SOCKS5 proxy
 - **DNS bridge** — socat relay that captures DNS queries inside the namespace and forwards them to a configured DNS server
 
 All features degrade gracefully when the kernel or permissions don't support them. Run `greywall --linux-features` to see what's available on your system.
 
-**Dependencies:** `bubblewrap`, `socat`
+**Dependencies:** `bubblewrap`, `socat`, `xdg-dbus-proxy` (optional, for notify-send support)
 
 ## macOS
 

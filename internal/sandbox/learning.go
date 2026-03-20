@@ -50,6 +50,11 @@ func LearnedTemplatePath(cmdName string) string {
 // SanitizeTemplateName sanitizes a command name for use as a filename.
 // Only allows alphanumeric, dash, underscore, and dot characters.
 func SanitizeTemplateName(name string) string {
+	// Lowercase to avoid case-insensitive filesystem collisions (macOS APFS).
+	// Without this, "Claude" (desktop app) and "claude" (CLI) silently share
+	// the same profile on macOS, which can break the CLI when the desktop
+	// app's learned profile doesn't include paths the CLI needs.
+	name = strings.ToLower(name)
 	re := regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 	sanitized := re.ReplaceAllString(name, "_")
 	// Collapse multiple underscores

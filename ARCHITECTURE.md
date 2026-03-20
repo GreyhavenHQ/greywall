@@ -43,7 +43,7 @@ greywall/
 │   └── sandbox/         # Platform-specific sandboxing
 │       ├── manager.go   # Orchestrates sandbox lifecycle
 │       ├── macos.go     # macOS sandbox-exec profiles
-│       ├── linux.go     # Linux bubblewrap + socat bridges
+│       ├── linux.go     # Linux bubblewrap + socat bridges + D-Bus proxy
 │       ├── linux_seccomp.go    # Seccomp BPF syscall filtering
 │       ├── linux_landlock.go   # Landlock filesystem control
 │       ├── linux_ebpf.go       # eBPF violation monitoring

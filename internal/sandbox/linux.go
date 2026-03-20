@@ -236,14 +236,18 @@ func NewReverseBridge(ports []int, debug bool) (*ReverseBridge, error) {
 	}
 	socketID := hex.EncodeToString(id)
 
-	tmpDir := os.TempDir()
+	socketDir := filepath.Join(os.TempDir(), fmt.Sprintf("greywall-rev-%s", socketID))
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to create reverse bridge socket directory: %w", err)
+	}
+
 	bridge := &ReverseBridge{
 		Ports: ports,
 		debug: debug,
 	}
 
 	for _, port := range ports {
-		socketPath := filepath.Join(tmpDir, fmt.Sprintf("greywall-rev-%d-%s.sock", port, socketID))
+		socketPath := filepath.Join(socketDir, fmt.Sprintf("%d.sock", port))
 		bridge.SocketPaths = append(bridge.SocketPaths, socketPath)
 
 		// Start reverse bridge: TCP listen on host port -> Unix socket
@@ -280,14 +284,236 @@ func (b *ReverseBridge) Cleanup() {
 		}
 	}
 
-	// Clean up socket files
+	// Clean up socket files and directory
 	for _, socketPath := range b.SocketPaths {
 		_ = os.Remove(socketPath)
+	}
+	if len(b.SocketPaths) > 0 {
+		_ = os.Remove(filepath.Dir(b.SocketPaths[0]))
 	}
 
 	if b.debug {
 		fmt.Fprintf(os.Stderr, "[greywall:linux] Reverse bridges cleaned up\n")
 	}
+}
+
+// ForwardBridge bridges host localhost ports into the sandbox via Unix sockets.
+// Host side: socat listens on a Unix socket and forwards to localhost:PORT.
+// Sandbox side: socat listens on localhost:PORT and forwards through the Unix socket.
+type ForwardBridge struct {
+	Ports       []int
+	SocketPaths []string // Unix socket paths for each port
+	processes   []*exec.Cmd
+	debug       bool
+}
+
+// NewForwardBridge creates Unix socket bridges for outbound localhost connections.
+// Host listens on Unix sockets and forwards to localhost ports on the host.
+func NewForwardBridge(ports []int, debug bool) (*ForwardBridge, error) {
+	if len(ports) == 0 {
+		return nil, nil
+	}
+
+	if _, err := exec.LookPath("socat"); err != nil {
+		return nil, fmt.Errorf("socat is required on Linux but not found: %w", err)
+	}
+
+	id := make([]byte, 8)
+	if _, err := rand.Read(id); err != nil {
+		return nil, fmt.Errorf("failed to generate socket ID: %w", err)
+	}
+	socketID := hex.EncodeToString(id)
+
+	socketDir := filepath.Join(os.TempDir(), fmt.Sprintf("greywall-fwd-%s", socketID))
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to create forward bridge socket directory: %w", err)
+	}
+
+	bridge := &ForwardBridge{
+		Ports: ports,
+		debug: debug,
+	}
+
+	for _, port := range ports {
+		socketPath := filepath.Join(socketDir, fmt.Sprintf("%d.sock", port))
+		bridge.SocketPaths = append(bridge.SocketPaths, socketPath)
+
+		// Start forward bridge: Unix socket listen -> TCP connect to host localhost:port
+		args := []string{
+			fmt.Sprintf("UNIX-LISTEN:%s,fork,reuseaddr", socketPath),
+			fmt.Sprintf("TCP:127.0.0.1:%d", port),
+		}
+		proc := exec.Command("socat", args...) //nolint:gosec // args constructed from trusted input
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Starting forward bridge for port %d: socat %s\n", port, strings.Join(args, " "))
+		}
+		if err := proc.Start(); err != nil {
+			bridge.Cleanup()
+			return nil, fmt.Errorf("failed to start forward bridge for port %d: %w", port, err)
+		}
+		bridge.processes = append(bridge.processes, proc)
+	}
+
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Forward bridges ready for ports: %v\n", ports)
+	}
+
+	return bridge, nil
+}
+
+// Cleanup stops the forward bridge processes and removes socket files.
+func (b *ForwardBridge) Cleanup() {
+	for _, proc := range b.processes {
+		if proc != nil && proc.Process != nil {
+			_ = proc.Process.Kill()
+			_ = proc.Wait()
+		}
+	}
+
+	for _, socketPath := range b.SocketPaths {
+		_ = os.Remove(socketPath)
+	}
+	if len(b.SocketPaths) > 0 {
+		_ = os.Remove(filepath.Dir(b.SocketPaths[0]))
+	}
+
+	if b.debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Forward bridges cleaned up\n")
+	}
+}
+
+// DbusBridge runs xdg-dbus-proxy to provide a filtered D-Bus session bus inside the sandbox.
+// Only org.freedesktop.Notifications is allowed, blocking GVFS, gnome-keyring, and all
+// other D-Bus services that could be used for sandbox escape.
+type DbusBridge struct {
+	SocketPath string    // Filtered proxy socket path
+	process    *exec.Cmd // xdg-dbus-proxy process
+	debug      bool
+}
+
+// NewDbusBridge creates a filtered D-Bus proxy that only allows desktop notifications.
+// Returns nil (not an error) if xdg-dbus-proxy is not available or D-Bus is not running.
+func NewDbusBridge(debug bool) *DbusBridge {
+	if _, err := exec.LookPath("xdg-dbus-proxy"); err != nil {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] xdg-dbus-proxy not found, notify-send will not work inside sandbox\n")
+		}
+		return nil
+	}
+
+	// Find the host D-Bus session bus address
+	busAddr := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+	if busAddr == "" {
+		uid := os.Getuid()
+		defaultSocket := fmt.Sprintf("/run/user/%d/bus", uid)
+		if fileExists(defaultSocket) {
+			busAddr = fmt.Sprintf("unix:path=%s", defaultSocket)
+		}
+	}
+	if busAddr == "" {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] No D-Bus session bus found, skipping D-Bus proxy\n")
+		}
+		return nil
+	}
+
+	id := make([]byte, 8)
+	if _, err := rand.Read(id); err != nil {
+		return nil
+	}
+	socketID := hex.EncodeToString(id)
+
+	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("greywall-dbus-%s.sock", socketID))
+
+	bridge := &DbusBridge{
+		SocketPath: socketPath,
+		debug:      debug,
+	}
+
+	// Start xdg-dbus-proxy with strict filtering:
+	// --filter: deny everything by default
+	// --talk=org.freedesktop.Notifications: allow notify-send
+	args := []string{
+		busAddr,
+		socketPath,
+		"--filter",
+		"--talk=org.freedesktop.Notifications",
+	}
+	bridge.process = exec.Command("xdg-dbus-proxy", args...) //nolint:gosec // args constructed from trusted input
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Starting D-Bus proxy: xdg-dbus-proxy %s\n", strings.Join(args, " "))
+	}
+	if err := bridge.process.Start(); err != nil {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Failed to start D-Bus proxy: %v\n", err)
+		}
+		return nil
+	}
+
+	// Wait for socket to be created
+	for range 50 {
+		if fileExists(socketPath) {
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus proxy ready (%s)\n", socketPath)
+			}
+			return bridge
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	bridge.Cleanup()
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Timeout waiting for D-Bus proxy socket\n")
+	}
+	return nil
+}
+
+// Cleanup stops the D-Bus proxy and removes the socket file.
+func (b *DbusBridge) Cleanup() {
+	if b.process != nil && b.process.Process != nil {
+		_ = b.process.Process.Kill()
+		_ = b.process.Wait()
+	}
+	_ = os.Remove(b.SocketPath)
+
+	if b.debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus proxy cleaned up\n")
+	}
+}
+
+// dbusIsolationArgs returns bwrap arguments to block the D-Bus session bus.
+// The D-Bus session socket at /run/user/<uid>/bus allows sandboxed processes to
+// communicate with host services (GVFS for arbitrary file reads, gnome-keyring
+// for stored passwords, Flatpak portal for process launch outside sandbox).
+// We overlay /run/user with a tmpfs, hiding all user session sockets.
+// If a DbusBridge is provided, its filtered socket is bind-mounted as the session
+// bus, allowing only org.freedesktop.Notifications (notify-send).
+//
+// This also blocks SSH agent, GPG agent, Wayland, PipeWire, and other sockets
+// under /run/user/. SSH/GPG can be re-added via allowRead in the config if needed.
+func dbusIsolationArgs(dbusBridge *DbusBridge, debug bool) []string {
+	if !fileExists("/run/user") {
+		return nil
+	}
+
+	uid := os.Getuid()
+	userRunDir := fmt.Sprintf("/run/user/%d", uid)
+
+	args := []string{"--tmpfs", "/run/user"}
+
+	// If we have a filtered D-Bus proxy, bind-mount it as the session bus socket
+	// so notify-send works while everything else (GVFS, keyring, etc.) is blocked
+	if dbusBridge != nil {
+		args = append(args, "--dir", userRunDir)
+		args = append(args, "--bind", dbusBridge.SocketPath, filepath.Join(userRunDir, "bus"))
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus session bus filtered (only org.freedesktop.Notifications allowed)\n")
+		}
+	} else if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus session bus isolated (--tmpfs /run/user)\n")
+	}
+
+	return args
 }
 
 func fileExists(path string) bool {
@@ -323,13 +549,64 @@ func canMountOver(path string) bool {
 	return fileExists(path)
 }
 
-// sameDevice returns true if both paths reside on the same filesystem (device).
-func sameDevice(path1, path2 string) bool {
-	var s1, s2 syscall.Stat_t
-	if syscall.Stat(path1, &s1) != nil || syscall.Stat(path2, &s2) != nil {
-		return true // err on the side of caution
+// isSeparateMount returns true if path is on a different mount than its parent.
+// This detects separate mounts (e.g., /run as tmpfs) that won't be visible
+// after a non-recursive bind of /.
+func isSeparateMount(path string) bool {
+	parent := filepath.Dir(path)
+	if parent == path {
+		return false
 	}
-	return s1.Dev == s2.Dev
+	var s1, s2 syscall.Stat_t
+	if syscall.Stat(parent, &s1) != nil || syscall.Stat(path, &s2) != nil {
+		return false
+	}
+	return s1.Dev != s2.Dev
+}
+
+// resolveSymlinkForBind checks if dest is a symlink whose target lives under
+// a separate mount point (e.g., /run as tmpfs). After a non-recursive
+// --ro-bind / /, such mounts are empty, so bwrap fails when it follows the
+// symlink to a nonexistent target ("Can't create file at ...").
+//
+// Returns extra bwrap args (--tmpfs, --dir, --ro-bind) to make the symlink
+// target reachable. Returns nil if dest is not a symlink or the target is on
+// the root mount.
+func resolveSymlinkForBind(dest string, debug bool) (extraArgs []string) {
+	target, err := filepath.EvalSymlinks(dest)
+	if err != nil || target == dest {
+		return nil
+	}
+
+	// Walk intermediary dirs to find a separate mount point.
+	targetDir := filepath.Dir(target)
+	dirs := intermediaryDirs("/", targetDir)
+	separateMountIdx := -1
+	for i, dir := range dirs {
+		if isSeparateMount(dir) {
+			separateMountIdx = i
+			break
+		}
+	}
+	if separateMountIdx < 0 {
+		return nil // target is on the root mount, should be reachable
+	}
+
+	// The mount point itself gets --tmpfs (it's an empty stub after
+	// non-recursive bind), deeper dirs get --dir.
+	for i := separateMountIdx; i < len(dirs); i++ {
+		if i == separateMountIdx {
+			extraArgs = append(extraArgs, "--tmpfs", dirs[i])
+		} else {
+			extraArgs = append(extraArgs, "--dir", dirs[i])
+		}
+	}
+	extraArgs = append(extraArgs, "--ro-bind", target, target)
+
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Resolved symlink %s -> %s (separate mount at %s)\n", dest, target, dirs[separateMountIdx])
+	}
+	return extraArgs
 }
 
 // intermediaryDirs returns the chain of directories between root and targetDir,
@@ -398,7 +675,7 @@ func getMandatoryDenyPaths(cwd string) []string {
 // buildDenyByDefaultMounts builds bwrap arguments for deny-by-default filesystem isolation.
 // Starts with --tmpfs / (empty root), then selectively mounts system paths read-only,
 // CWD read-write, and user tooling paths read-only. Sensitive files within CWD are masked.
-func buildDenyByDefaultMounts(cfg *config.Config, cwd string, debug bool) []string {
+func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBridge, debug bool) []string {
 	var args []string
 	home, _ := os.UserHomeDir()
 
@@ -424,6 +701,12 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, debug bool) []stri
 			args = append(args, "--ro-bind", p, p)
 		}
 	}
+
+	// Block D-Bus session bus to prevent sandbox escape via GVFS/gnome-keyring.
+	// /run/user/<uid>/bus exposes all host session services (file read via GVFS,
+	// password read via gnome-keyring, process launch via Flatpak portal).
+	// --tmpfs /run/user overlays the bind-mounted /run, hiding the D-Bus socket.
+	args = append(args, dbusIsolationArgs(dbusBridge, debug)...)
 
 	// /sys needs to be accessible for system info
 	if fileExists("/sys") && canMountOver("/sys") {
@@ -594,8 +877,8 @@ func isSystemMountPoint(path string) bool {
 
 // WrapCommandLinux wraps a command with Linux bubblewrap sandbox.
 // It uses available security features (Landlock, seccomp) with graceful fallback.
-func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, tun2socksPath string, debug bool) (string, error) {
-	return WrapCommandLinuxWithOptions(cfg, command, proxyBridge, dnsBridge, reverseBridge, tun2socksPath, LinuxSandboxOptions{
+func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, forwardBridge *ForwardBridge, dbusBridge *DbusBridge, tun2socksPath string, debug bool) (string, error) {
+	return WrapCommandLinuxWithOptions(cfg, command, proxyBridge, dnsBridge, reverseBridge, forwardBridge, dbusBridge, tun2socksPath, LinuxSandboxOptions{
 		UseLandlock: true, // Enabled by default, will fall back if not available
 		UseSeccomp:  true, // Enabled by default
 		UseEBPF:     true, // Enabled by default if available
@@ -604,7 +887,7 @@ func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBrid
 }
 
 // WrapCommandLinuxWithOptions wraps a command with configurable sandbox options.
-func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
+func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, forwardBridge *ForwardBridge, dbusBridge *DbusBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		return "", fmt.Errorf("bubblewrap (bwrap) is required on Linux but not found: %w", err)
 	}
@@ -680,13 +963,10 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 			bwrapArgs = append(bwrapArgs, "--bind", cwd, cwd)
 		}
 
-		// Make XDG_RUNTIME_DIR writable so dconf and other runtime services
-		// (Wayland, PulseAudio, D-Bus) work inside the sandbox.
-		// Writes to /run/ are already filtered out by the learning parser.
-		xdgRuntime := os.Getenv("XDG_RUNTIME_DIR")
-		if xdgRuntime != "" && fileExists(xdgRuntime) {
-			bwrapArgs = append(bwrapArgs, "--bind", xdgRuntime, xdgRuntime)
-		}
+		// Block D-Bus session bus even in learning mode to prevent sandbox escape
+		// via GVFS/gnome-keyring. dconf and Wayland still work since they use
+		// their own sockets, not the D-Bus session bus.
+		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.Debug)...)
 
 	}
 
@@ -700,10 +980,12 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		if opts.Debug {
 			fmt.Fprintf(os.Stderr, "[greywall:linux] DefaultDenyRead mode enabled - tmpfs root with selective mounts\n")
 		}
-		bwrapArgs = append(bwrapArgs, buildDenyByDefaultMounts(cfg, cwd, opts.Debug)...)
+		bwrapArgs = append(bwrapArgs, buildDenyByDefaultMounts(cfg, cwd, dbusBridge, opts.Debug)...)
 	default:
 		// Legacy mode: bind entire root filesystem read-only
 		bwrapArgs = append(bwrapArgs, "--ro-bind", "/", "/")
+		// Block D-Bus session bus to prevent sandbox escape via GVFS/gnome-keyring
+		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.Debug)...)
 	}
 
 	// Mount special filesystems
@@ -721,55 +1003,15 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	}
 
 	// Ensure /etc/resolv.conf is readable inside the sandbox.
-	// On some systems (e.g., WSL), /etc/resolv.conf is a symlink to a path
-	// on a separate mount point (e.g., /mnt/wsl/resolv.conf) that isn't
-	// reachable after --ro-bind / / (non-recursive bind). When the target
-	// is on a different filesystem, we create intermediate directories and
-	// bind the real file at its original location so the symlink resolves.
-	if target, err := filepath.EvalSymlinks("/etc/resolv.conf"); err == nil && target != "/etc/resolv.conf" {
-		// Skip targets under specially-mounted dirs — a --tmpfs there would
-		// overwrite the --dev-bind or --proc mounts established above.
-		targetUnderSpecialMount := strings.HasPrefix(target, "/dev/") ||
-			strings.HasPrefix(target, "/proc/") ||
-			strings.HasPrefix(target, "/tmp/")
-		// In defaultDenyRead mode, also skip if the target is under a path
-		// already individually bound (e.g., /run, /sys) — a --tmpfs would
-		// overwrite that explicit bind. Targets under unbound paths like
-		// /mnt/wsl still need the fix.
-		if defaultDenyRead {
-			for _, p := range GetDefaultReadablePaths() {
-				if strings.HasPrefix(target, p+"/") {
-					targetUnderSpecialMount = true
-					break
-				}
-			}
-		}
-		if fileExists(target) && !sameDevice("/", target) && !targetUnderSpecialMount {
-			// Make the symlink target reachable by creating its parent dirs.
-			// Walk down from / to the target's parent: skip dirs on the root
-			// device (they have real content like /mnt/c, /mnt/d on WSL),
-			// apply --tmpfs at the mount boundary (first dir on a different
-			// device — an empty mount-point stub safe to replace), then --dir
-			// for any deeper subdirectories inside the now-writable tmpfs.
-			targetDir := filepath.Dir(target)
-			mountBoundaryFound := false
-			for _, dir := range intermediaryDirs("/", targetDir) {
-				if !mountBoundaryFound {
-					if !sameDevice("/", dir) {
-						bwrapArgs = append(bwrapArgs, "--tmpfs", dir)
-						mountBoundaryFound = true
-					}
-					// skip dirs still on root device
-				} else {
-					bwrapArgs = append(bwrapArgs, "--dir", dir)
-				}
-			}
-			if mountBoundaryFound {
-				bwrapArgs = append(bwrapArgs, "--ro-bind", target, target)
-			}
-			if opts.Debug {
-				fmt.Fprintf(os.Stderr, "[greywall:linux] Resolved /etc/resolv.conf symlink -> %s (cross-mount)\n", target)
-			}
+	// On many systems, /etc/resolv.conf is a symlink (e.g., systemd-resolved
+	// points it to /run/systemd/resolve/stub-resolv.conf, WSL points it to
+	// /mnt/wsl/resolv.conf). After --ro-bind / / (non-recursive), separate
+	// mounts like /run are empty, so the symlink target is unreachable and
+	// bwrap fails with "Can't create file at /etc/resolv.conf".
+	if !defaultDenyRead {
+		// In defaultDenyRead mode, /run is already explicitly mounted.
+		if extra := resolveSymlinkForBind("/etc/resolv.conf", opts.Debug); len(extra) > 0 {
+			bwrapArgs = append(bwrapArgs, extra...)
 		}
 	}
 
@@ -939,7 +1181,16 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 				}
 				_ = tmpResolv.Close()
 				dnsRelayResolvConf = tmpResolv.Name()
-				bwrapArgs = append(bwrapArgs, "--ro-bind", dnsRelayResolvConf, "/etc/resolv.conf")
+				// If /etc/resolv.conf is a symlink, bind to the resolved target
+				// path directly. bwrap follows symlinks when creating bind mount
+				// destinations, and the symlink target may not exist inside the
+				// sandbox (e.g., /run/systemd/resolve/stub-resolv.conf on a
+				// separate tmpfs mount). Binding to the resolved path avoids this.
+				resolvDest := "/etc/resolv.conf"
+				if resolved, err := filepath.EvalSymlinks(resolvDest); err == nil {
+					resolvDest = resolved
+				}
+				bwrapArgs = append(bwrapArgs, "--ro-bind", dnsRelayResolvConf, resolvDest)
 				if opts.Debug {
 					if dnsBridge != nil {
 						fmt.Fprintf(os.Stderr, "[greywall:linux] DNS: overriding resolv.conf -> 127.0.0.1 (bridge to %s)\n", dnsBridge.DnsAddr)
@@ -951,11 +1202,27 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		}
 	}
 
-	// Bind reverse socket directory if needed (sockets created inside sandbox)
-	if reverseBridge != nil && len(reverseBridge.SocketPaths) > 0 {
-		// Get the temp directory containing the reverse sockets
-		tmpDir := filepath.Dir(reverseBridge.SocketPaths[0])
-		bwrapArgs = append(bwrapArgs, "--bind", tmpDir, tmpDir)
+	// Bind bridge socket directories into the sandbox.
+	// Bridges use unique subdirectories under /tmp (e.g. /tmp/greywall-rev-xxx/)
+	// so bind-mounting them doesn't overwrite --tmpfs /tmp (which would break tun2socks).
+	bridgeSocketDirs := make(map[string]bool)
+	if reverseBridge != nil {
+		for _, sp := range reverseBridge.SocketPaths {
+			dir := filepath.Dir(sp)
+			if !bridgeSocketDirs[dir] {
+				bridgeSocketDirs[dir] = true
+				bwrapArgs = append(bwrapArgs, "--bind", dir, dir)
+			}
+		}
+	}
+	if forwardBridge != nil {
+		for _, sp := range forwardBridge.SocketPaths {
+			dir := filepath.Dir(sp)
+			if !bridgeSocketDirs[dir] {
+				bridgeSocketDirs[dir] = true
+				bwrapArgs = append(bwrapArgs, "--bind", dir, dir)
+			}
+		}
 	}
 
 	// Get greywall executable path for Landlock wrapper
@@ -1068,6 +1335,21 @@ export no_proxy=localhost,127.0.0.1
 				socketPath, port,
 			)
 			fmt.Fprintf(&innerScript, "REV_%d_PID=$!\n", port)
+		}
+		innerScript.WriteString("\n")
+	}
+
+	// Set up forward (outbound localhost) socat listeners inside the sandbox
+	if forwardBridge != nil && len(forwardBridge.Ports) > 0 {
+		innerScript.WriteString("\n# Start forward bridge listeners for outbound localhost connections\n")
+		for i, port := range forwardBridge.Ports {
+			socketPath := forwardBridge.SocketPaths[i]
+			// Listen on localhost:port inside the sandbox, forward to Unix socket -> host localhost:port
+			fmt.Fprintf(&innerScript,
+				"socat TCP-LISTEN:%d,fork,reuseaddr,bind=127.0.0.1 UNIX-CONNECT:%s >/dev/null 2>&1 &\n",
+				port, socketPath,
+			)
+			fmt.Fprintf(&innerScript, "FWD_%d_PID=$!\n", port)
 		}
 		innerScript.WriteString("\n")
 	}

@@ -8,7 +8,7 @@ BINARY_UNIX=$(BINARY_NAME)_unix
 TUN2SOCKS_VERSION=v2.5.2
 TUN2SOCKS_BIN_DIR=internal/sandbox/bin
 
-.PHONY: all build build-ci build-linux test test-ci clean deps install-lint-tools setup setup-ci run fmt lint release release-minor download-tun2socks help
+.PHONY: all build build-ci build-linux test test-ci clean deps install-lint-tools setup setup-ci run fmt lint release release-minor release-beta download-tun2socks help
 
 all: build
 
@@ -102,6 +102,10 @@ release-minor:
 	@echo "Creating minor release..."
 	./scripts/release.sh minor
 
+release-beta:
+	@echo "Creating beta release..."
+	./scripts/release.sh beta
+
 help:
 	@echo "Available targets:"
 	@echo "  all                - build (default)"
@@ -122,4 +126,5 @@ help:
 	@echo "  lint               - Lint code"
 	@echo "  release            - Create patch release (v0.0.X)"
 	@echo "  release-minor      - Create minor release (v0.X.0)"
+	@echo "  release-beta       - Create beta release (v0.0.X-beta.N)"
 	@echo "  help               - Show this help"

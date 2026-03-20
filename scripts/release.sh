@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: ./scripts/release.sh [patch|minor]
+# Usage: ./scripts/release.sh [patch|minor|beta]
 # Default: patch
 
 BUMP_TYPE="${1:-patch}"
@@ -16,10 +16,10 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
-# Validate bump type
-if [[ "$BUMP_TYPE" != "patch" && "$BUMP_TYPE" != "minor" ]]; then
-    error "Invalid bump type: $BUMP_TYPE. Use 'patch' or 'minor' (or no argument for minor)."
-fi
+DRY_RUN="${DRY_RUN:-0}"
+
+# shellcheck source=scripts/bump_version.sh
+source "$(dirname "$0")/bump_version.sh"
 
 info "Bump type: $BUMP_TYPE"
 
@@ -92,33 +92,11 @@ info "✓ All preflight checks passed"
 # Calculate new version
 # =============================================================================
 
-if [[ -z "$LAST_TAG" ]]; then
-    # No existing tags, start at v0.1.0
-    NEW_VERSION="v0.1.0"
-    info "No existing tags found. Starting at $NEW_VERSION"
-else
-    # Parse current version (strip 'v' prefix)
-    VERSION="${LAST_TAG#v}"
-    IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-    
-    # Validate parsed version
-    if [[ -z "$MAJOR" || -z "$MINOR" || -z "$PATCH" ]]; then
-        error "Failed to parse version from tag: $LAST_TAG"
-    fi
-    
-    # Increment based on bump type
-    case "$BUMP_TYPE" in
-        patch)
-            PATCH=$((PATCH + 1))
-            ;;
-        minor)
-            MINOR=$((MINOR + 1))
-            PATCH=0
-            ;;
-    esac
-    
-    NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
-    info "Version bump: $LAST_TAG → $NEW_VERSION"
+NEW_VERSION=$(bump_version "$LAST_TAG" "$BUMP_TYPE")
+
+if [[ "$DRY_RUN" == "1" ]]; then
+    info "Dry run: would release $NEW_VERSION"
+    exit 0
 fi
 
 # =============================================================================
@@ -150,4 +128,4 @@ git push origin "$NEW_VERSION"
 echo ""
 info "✓ Released $NEW_VERSION"
 info "GitHub Actions will now build and publish the release."
-info "Watch progress at: https://github.com/Monadical-SAS/greywall/actions"
+info "Watch progress at: https://github.com/GreyhavenHQ/greywall/actions"
