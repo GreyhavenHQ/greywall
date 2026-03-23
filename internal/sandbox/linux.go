@@ -1140,10 +1140,19 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 
 	// Bind the proxy bridge Unix socket into the sandbox (needs to be writable)
 	var dnsRelayResolvConf string // temp file path for custom resolv.conf
+	var caCertPath string         // greyproxy CA cert path (if available)
 	if proxyBridge != nil {
 		bwrapArgs = append(bwrapArgs,
 			"--bind", proxyBridge.SocketPath, proxyBridge.SocketPath,
 		)
+
+		// Bind-mount the greyproxy CA certificate so Node.js apps can trust it.
+		// Node.js uses its own compiled-in CA bundle and ignores the OS keychain,
+		// so NODE_EXTRA_CA_CERTS must point to the MITM CA cert.
+		if certPath := greyproxyCACertPath(); certPath != "" {
+			caCertPath = certPath
+			bwrapArgs = append(bwrapArgs, "--ro-bind", certPath, certPath)
+		}
 		if tun2socksPath != "" && features.CanUseTransparentProxy() {
 			// Bind /dev/net/tun for TUN device creation inside the sandbox
 			if features.HasDevNetTun {
@@ -1256,6 +1265,11 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	var innerScript strings.Builder
 
 	innerScript.WriteString("export GREYWALL_SANDBOX=1\n")
+
+	// Set NODE_EXTRA_CA_CERTS so Node.js apps trust the greyproxy MITM CA certificate
+	if caCertPath != "" {
+		fmt.Fprintf(&innerScript, "export NODE_EXTRA_CA_CERTS=%s\n", ShellQuoteSingle(caCertPath))
+	}
 
 	if proxyBridge != nil && tun2socksPath != "" && features.CanUseTransparentProxy() {
 		// Build the tun2socks proxy URL with credentials if available
