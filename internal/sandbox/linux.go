@@ -743,6 +743,21 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 		}
 	}
 
+	// /var: on modern distros, /var/run -> /run and /var/lock -> /run/lock.
+	// Many programs (e.g., virsh, systemctl) use /var/run paths.
+	// We recreate these symlinks so they resolve correctly inside the sandbox.
+	if fileExists("/var") {
+		args = append(args, "--dir", "/var")
+		for _, sub := range []string{"/var/run", "/var/lock"} {
+			if isSymlink(sub) {
+				target, err := os.Readlink(sub)
+				if err == nil {
+					args = append(args, "--symlink", target, sub)
+				}
+			}
+		}
+	}
+
 	// /run: use an empty tmpfs and selectively mount only what's needed.
 	// Mounting all of /run exposes dangerous host sockets (Docker, Podman,
 	// containerd, libvirt, etc.) that allow sandbox escape even when
