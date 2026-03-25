@@ -191,6 +191,8 @@ func GenerateSessionID() (string, error) {
 }
 
 // SubstituteEnv replaces credential values with placeholders in the environment.
+// If a mapping's env var is not present in the environment, it is appended
+// (this happens for global credentials injected via --cred).
 // Returns the modified environment.
 func SubstituteEnv(env []string, mappings []CredentialMapping) []string {
 	// Build lookup: envVar -> placeholder
@@ -199,6 +201,7 @@ func SubstituteEnv(env []string, mappings []CredentialMapping) []string {
 		lookup[m.EnvVar] = m.Placeholder
 	}
 
+	seen := make(map[string]bool, len(mappings))
 	result := make([]string, len(env))
 	for i, entry := range env {
 		idx := strings.Index(entry, "=")
@@ -209,59 +212,98 @@ func SubstituteEnv(env []string, mappings []CredentialMapping) []string {
 		key := entry[:idx]
 		if placeholder, ok := lookup[key]; ok {
 			result[i] = key + "=" + placeholder
+			seen[key] = true
 		} else {
 			result[i] = entry
 		}
 	}
+
+	// Append any mappings for env vars not already present
+	for _, m := range mappings {
+		if !seen[m.EnvVar] {
+			result = append(result, m.EnvVar+"="+m.Placeholder)
+		}
+	}
+
 	return result
 }
 
 // sessionRequest is the JSON body for POST /api/sessions.
 type sessionRequest struct {
-	SessionID     string            `json:"session_id"`
-	ContainerName string            `json:"container_name"`
-	Mappings      map[string]string `json:"mappings"`
-	Labels        map[string]string `json:"labels"`
-	TTLSeconds    int               `json:"ttl_seconds"`
+	SessionID         string            `json:"session_id"`
+	ContainerName     string            `json:"container_name"`
+	Mappings          map[string]string `json:"mappings,omitempty"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	GlobalCredentials []string          `json:"global_credentials,omitempty"`
+	TTLSeconds        int               `json:"ttl_seconds"`
+}
+
+// sessionResponse is the JSON response from POST /api/sessions.
+type sessionResponse struct {
+	SessionID         string            `json:"session_id"`
+	ExpiresAt         string            `json:"expires_at"`
+	CredentialCount   int               `json:"credential_count"`
+	GlobalCredentials map[string]string `json:"global_credentials,omitempty"` // label -> placeholder
+}
+
+// RegisterSessionResult holds the result of a session registration.
+type RegisterSessionResult struct {
+	// GlobalCredentials maps label -> placeholder for resolved global credentials.
+	GlobalCredentials map[string]string
 }
 
 // RegisterSession registers credential mappings with greyproxy.
-func RegisterSession(sessionID, containerName string, mappings []CredentialMapping, apiBase string) error {
+// globalCredLabels is an optional list of global credential labels to resolve.
+// Returns the resolved global credential placeholders (label -> placeholder).
+func RegisterSession(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, apiBase string) (*RegisterSessionResult, error) {
 	if apiBase == "" {
 		apiBase = greyproxyAPIBase
 	}
 
-	reqMappings := make(map[string]string, len(mappings))
-	reqLabels := make(map[string]string, len(mappings))
-	for _, m := range mappings {
-		reqMappings[m.Placeholder] = m.RealValue
-		reqLabels[m.Placeholder] = m.EnvVar
+	var reqMappings map[string]string
+	var reqLabels map[string]string
+	if len(mappings) > 0 {
+		reqMappings = make(map[string]string, len(mappings))
+		reqLabels = make(map[string]string, len(mappings))
+		for _, m := range mappings {
+			reqMappings[m.Placeholder] = m.RealValue
+			reqLabels[m.Placeholder] = m.EnvVar
+		}
 	}
 
 	body := sessionRequest{
-		SessionID:     sessionID,
-		ContainerName: containerName,
-		Mappings:      reqMappings,
-		Labels:        reqLabels,
-		TTLSeconds:    defaultSessionTTL,
+		SessionID:         sessionID,
+		ContainerName:     containerName,
+		Mappings:          reqMappings,
+		Labels:            reqLabels,
+		GlobalCredentials: globalCredLabels,
+		TTLSeconds:        defaultSessionTTL,
 	}
 
 	data, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("marshal session request: %w", err)
+		return nil, fmt.Errorf("marshal session request: %w", err)
 	}
 
-	resp, err := http.Post(apiBase+"/api/sessions", "application/json", bytes.NewReader(data))
+	resp, err := http.Post(apiBase+"/api/sessions", "application/json", bytes.NewReader(data)) //nolint:gosec // local API call
 	if err != nil {
-		return fmt.Errorf("register session: %w", err)
+		return nil, fmt.Errorf("register session: %w", err)
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("register session: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("register session: HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
-	return nil
+
+	var sessResp sessionResponse
+	if err := json.Unmarshal(respBody, &sessResp); err != nil {
+		return nil, fmt.Errorf("parse session response: %w", err)
+	}
+
+	return &RegisterSessionResult{
+		GlobalCredentials: sessResp.GlobalCredentials,
+	}, nil
 }
 
 // HeartbeatSession sends a heartbeat to keep the session alive.
@@ -306,7 +348,7 @@ func DeleteSession(sessionID, apiBase string) error {
 // StartHeartbeatLoop starts a goroutine that sends heartbeats every interval.
 // It re-registers the session if heartbeat returns 404.
 // Returns a stop function.
-func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMapping, apiBase string, debug bool) func() {
+func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, apiBase string, debug bool) func() {
 	stop := make(chan struct{})
 
 	go func() {
@@ -324,7 +366,7 @@ func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMa
 						fmt.Fprintf(os.Stderr, "[greywall:cred] heartbeat failed: %v, re-registering\n", err)
 					}
 					// Re-register on failure (session may have expired or proxy restarted)
-					if regErr := RegisterSession(sessionID, containerName, mappings, apiBase); regErr != nil {
+					if _, regErr := RegisterSession(sessionID, containerName, mappings, globalCredLabels, apiBase); regErr != nil {
 						if debug {
 							fmt.Fprintf(os.Stderr, "[greywall:cred] re-register failed: %v\n", regErr)
 						}

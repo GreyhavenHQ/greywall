@@ -47,6 +47,7 @@ var (
 	profileName            string
 	autoProfile            bool
 	noCredentialProtection bool
+	credLabels             []string
 )
 
 func main() {
@@ -119,6 +120,7 @@ Configuration file format:
 	rootCmd.Flags().StringVar(&profileName, "profile", "", "Load profiles by name, comma-separated (e.g. --profile claude,uv)")
 	rootCmd.Flags().BoolVar(&autoProfile, "auto-profile", false, "Use saved or built-in profile without prompting")
 	rootCmd.Flags().BoolVar(&noCredentialProtection, "no-credential-protection", false, "Disable credential substitution (real credentials visible in sandbox)")
+	rootCmd.Flags().StringArrayVar(&credLabels, "cred", nil, "Inject a global credential by label (can be used multiple times, e.g. --cred ANTHROPIC_API_KEY)")
 
 	// Hidden aliases for backwards compatibility
 	rootCmd.Flags().StringVar(&profileName, "template", "", "Alias for --profile (deprecated)")
@@ -403,31 +405,46 @@ func runCommand(cmd *cobra.Command, args []string) error {
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall:cred] failed to detect credentials: %v\n", err)
 				}
-			} else if len(detected) > 0 {
-				credMappings = detected
-				containerName := cmdName
-				if containerName == "" {
-					containerName = "sandbox"
-				}
+			}
+			if detected == nil {
+				detected = []sandbox.CredentialMapping{}
+			}
 
-				if err := sandbox.RegisterSession(sessionID, containerName, detected, ""); err != nil {
+			containerName := cmdName
+			if containerName == "" {
+				containerName = "sandbox"
+			}
+
+			if len(detected) > 0 || len(credLabels) > 0 {
+				credMappings = detected
+
+				regResult, err := sandbox.RegisterSession(sessionID, containerName, detected, credLabels, "")
+				if err != nil {
 					if debug {
 						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to register session: %v (credentials will be visible)\n", err)
 					}
 					credMappings = nil // Don't substitute if registration failed
 				} else {
+					// Add global credential mappings returned by the proxy
+					for label, placeholder := range regResult.GlobalCredentials {
+						credMappings = append(credMappings, sandbox.CredentialMapping{
+							EnvVar:      label,
+							Placeholder: placeholder,
+						})
+					}
+
 					// Substitute credentials in the environment
-					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, detected)
-					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, detected, "", debug)
+					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, credMappings)
+					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, detected, credLabels, "", debug)
 
 					if debug {
 						var labels []string
-						for _, m := range detected {
+						for _, m := range credMappings {
 							labels = append(labels, m.EnvVar)
 						}
-						fmt.Fprintf(os.Stderr, "[greywall:cred] protected %d credentials: %s\n", len(detected), strings.Join(labels, ", "))
+						fmt.Fprintf(os.Stderr, "[greywall:cred] protected %d credentials: %s\n", len(credMappings), strings.Join(labels, ", "))
 					} else {
-						fmt.Fprintf(os.Stderr, "[greywall] Protected %d credential(s) via proxy substitution\n", len(detected))
+						fmt.Fprintf(os.Stderr, "[greywall] Protected %d credential(s) via proxy substitution\n", len(credMappings))
 					}
 				}
 			} else if debug {

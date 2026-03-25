@@ -146,6 +146,32 @@ func TestSubstituteEnv(t *testing.T) {
 	}
 }
 
+func TestSubstituteEnv_AppendsNewVars(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+	}
+
+	mappings := []CredentialMapping{
+		{EnvVar: "ANTHROPIC_API_KEY", Placeholder: "greyproxy:credential:v1:global:abc123"},
+	}
+
+	result := SubstituteEnv(env, mappings)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 env entries, got %d: %v", len(result), result)
+	}
+
+	found := false
+	for _, entry := range result {
+		if entry == "ANTHROPIC_API_KEY=greyproxy:credential:v1:global:abc123" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ANTHROPIC_API_KEY not appended: %v", result)
+	}
+}
+
 func TestGenerateSessionID(t *testing.T) {
 	id1, err := GenerateSessionID()
 	if err != nil {
