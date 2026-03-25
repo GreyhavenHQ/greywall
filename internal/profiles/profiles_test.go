@@ -2,6 +2,7 @@ package profiles_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -292,6 +293,24 @@ func TestSaveAsTemplate(t *testing.T) {
 	}
 	if cfg == nil {
 		t.Fatal("config.Load returned nil for saved template")
+	}
+}
+
+func TestBuiltinProfilesSerializeToJSON(t *testing.T) {
+	for _, name := range profiles.AvailableAgents() {
+		profile := profiles.GetAgentProfile(name)
+		if profile == nil {
+			t.Errorf("GetAgentProfile(%q) returned nil", name)
+			continue
+		}
+		data, err := json.MarshalIndent(profile, "", "  ")
+		if err != nil {
+			t.Errorf("json.MarshalIndent(%q) error: %v", name, err)
+			continue
+		}
+		if len(data) == 0 {
+			t.Errorf("json.MarshalIndent(%q) returned empty output", name)
+		}
 	}
 }
 

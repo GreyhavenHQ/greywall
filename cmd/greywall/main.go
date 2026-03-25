@@ -811,6 +811,20 @@ Examples:
 			data, err := os.ReadFile(profilePath) //nolint:gosec // user-specified profile path - intentional
 			if err != nil {
 				if os.IsNotExist(err) {
+					// Fall back to built-in profile registry
+					canonical := profiles.IsKnownAgent(name)
+					if canonical != "" {
+						profile := profiles.GetAgentProfile(canonical)
+						if profile != nil {
+							out, jsonErr := json.MarshalIndent(profile, "", "  ")
+							if jsonErr != nil {
+								return fmt.Errorf("failed to serialize profile: %w", jsonErr)
+							}
+							fmt.Printf("Profile: %s (built-in)\n\n", canonical)
+							fmt.Println(string(out))
+							return nil
+						}
+					}
 					return fmt.Errorf("profile %q not found\nRun: greywall profiles list", name)
 				}
 				return fmt.Errorf("failed to read profile: %w", err)
