@@ -1,0 +1,358 @@
+package sandbox
+
+import (
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+)
+
+const (
+	// greyproxyAPIBase is the default greyproxy API URL.
+	greyproxyAPIBase = "http://localhost:43080"
+
+	// placeholderPrefix identifies credential placeholders.
+	placeholderPrefix = "greyproxy:credential:v1"
+
+	// defaultSessionTTL is the default session TTL in seconds.
+	defaultSessionTTL = 900
+
+	// heartbeatInterval is how often heartbeats are sent.
+	heartbeatInterval = 60 * time.Second
+)
+
+// WellKnownCredentialEnvVars lists env var names that commonly contain secrets.
+var WellKnownCredentialEnvVars = []string{
+	// Tier 1: AI/LLM Providers
+	"ANTHROPIC_API_KEY", "CLAUDE_API_KEY",
+	"OPENAI_API_KEY", "OPENAI_ORG_ID",
+	"GOOGLE_API_KEY", "GEMINI_API_KEY",
+	"NVIDIA_API_KEY", "COHERE_API_KEY",
+	"HUGGINGFACE_TOKEN", "HF_TOKEN", "HF_API_KEY",
+	"MISTRAL_API_KEY", "PERPLEXITY_API_KEY", "GROQ_API_KEY",
+	"TOGETHER_API_KEY", "FIREWORKS_API_KEY", "REPLICATE_API_TOKEN",
+	"OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY",
+
+	// Tier 2: Cloud Providers
+	"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+	"GCP_API_KEY",
+	"AZURE_CLIENT_SECRET", "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID",
+	"DIGITALOCEAN_ACCESS_TOKEN", "DO_API_TOKEN",
+	"CLOUDFLARE_API_KEY", "CLOUDFLARE_API_TOKEN", "CF_API_KEY",
+	"FLY_API_TOKEN", "HEROKU_API_KEY", "VERCEL_TOKEN", "NETLIFY_AUTH_TOKEN",
+
+	// Tier 3: Payment / Financial
+	"STRIPE_SECRET_KEY", "STRIPE_API_KEY",
+	"PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET",
+	"SQUARE_ACCESS_TOKEN", "PLAID_SECRET", "PLAID_CLIENT_ID",
+	"GOCARDLESS_ACCESS_TOKEN",
+
+	// Tier 4: Dev Tools / SCM
+	"GITHUB_TOKEN", "GH_TOKEN", "GITHUB_CLIENT_SECRET",
+	"GITLAB_TOKEN", "GLAB_TOKEN", "CI_JOB_TOKEN",
+	"BITBUCKET_TOKEN", "BITBUCKET_CLIENT_SECRET",
+	"NPM_TOKEN", "NPM_AUTH_TOKEN", "PYPI_TOKEN", "TWINE_PASSWORD",
+	"DOCKER_PASSWORD", "DOCKERHUB_TOKEN",
+	"SNYK_TOKEN", "SENTRY_AUTH_TOKEN", "SENTRY_DSN",
+	"DD_API_KEY", "DATADOG_API_KEY",
+	"NEW_RELIC_LICENSE_KEY", "NEW_RELIC_API_KEY", "GRAFANA_API_KEY",
+	"PLANETSCALE_SERVICE_TOKEN",
+	"SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY",
+	"LINEAR_API_KEY", "CIRCLECI_TOKEN",
+
+	// Tier 5: Communication / SaaS
+	"TWILIO_AUTH_TOKEN", "TWILIO_ACCOUNT_SID",
+	"SENDGRID_API_KEY", "MAILGUN_API_KEY", "MAILCHIMP_API_KEY",
+	"SLACK_TOKEN", "SLACK_BOT_TOKEN", "SLACK_WEBHOOK_URL",
+	"DISCORD_TOKEN", "DISCORD_BOT_TOKEN", "TELEGRAM_BOT_TOKEN",
+	"INTERCOM_ACCESS_TOKEN", "ZENDESK_API_TOKEN", "HUBSPOT_API_KEY",
+
+	// Tier 6: Maps / Geo / Media
+	"GOOGLE_MAPS_API_KEY", "MAPBOX_ACCESS_TOKEN",
+	"ALGOLIA_API_KEY", "ALGOLIA_APP_ID",
+	"CLOUDINARY_URL", "CLOUDINARY_API_SECRET",
+	"CONTENTFUL_ACCESS_TOKEN", "SHOPIFY_ACCESS_TOKEN", "SHOPIFY_API_SECRET",
+
+	// Tier 7: Database Credentials
+	"DATABASE_URL", "DATABASE_PASSWORD", "DB_PASSWORD",
+	"PGPASSWORD", "POSTGRES_PASSWORD",
+	"MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD",
+	"MONGO_URI", "MONGODB_URI",
+	"REDIS_URL", "REDIS_PASSWORD",
+
+	// Tier 8: Auth / Crypto
+	"JWT_SECRET", "JWT_SIGNING_KEY",
+	"SESSION_SECRET", "SECRET_KEY", "APP_SECRET",
+	"ENCRYPTION_KEY", "MASTER_KEY",
+	"OAUTH_CLIENT_SECRET", "VAULT_TOKEN",
+}
+
+// credentialSuffixPatterns matches env var names by suffix pattern.
+var credentialSuffixPatterns = []string{
+	"_API_KEY",
+	"_SECRET_KEY",
+	"_SECRET",
+	"_TOKEN",
+	"_PASSWORD",
+	"_AUTH_TOKEN",
+	"_ACCESS_TOKEN",
+	"_ACCESS_KEY",
+	"_PRIVATE_KEY",
+}
+
+// nonCredentialVars lists env vars that match patterns but are not secrets.
+var nonCredentialVars = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "SHELL": true,
+	"TERM": true, "LANG": true, "LC_ALL": true,
+	"PWD": true, "OLDPWD": true, "SHLVL": true,
+	"EDITOR": true, "VISUAL": true, "PAGER": true,
+	"DISPLAY": true, "XDG_SESSION_TYPE": true,
+	"GREYWALL_SANDBOX": true,
+	"GOOGLE_APPLICATION_CREDENTIALS": true, // file path, not a credential
+	"STRIPE_PUBLISHABLE_KEY": true,          // public key, not secret
+}
+
+// CredentialMapping holds a detected credential and its placeholder.
+type CredentialMapping struct {
+	EnvVar      string
+	RealValue   string
+	Placeholder string
+}
+
+// DetectCredentials scans the environment for credential env vars.
+// Returns mappings for all detected credentials.
+func DetectCredentials(env []string, sessionID string) ([]CredentialMapping, error) {
+	wellKnown := make(map[string]bool, len(WellKnownCredentialEnvVars))
+	for _, v := range WellKnownCredentialEnvVars {
+		wellKnown[v] = true
+	}
+
+	var mappings []CredentialMapping
+	for _, entry := range env {
+		idx := strings.Index(entry, "=")
+		if idx < 0 {
+			continue
+		}
+		key := entry[:idx]
+		value := entry[idx+1:]
+
+		if value == "" || nonCredentialVars[key] {
+			continue
+		}
+
+		if wellKnown[key] || matchesSuffixPattern(key) {
+			placeholder, err := generatePlaceholder(sessionID)
+			if err != nil {
+				return nil, fmt.Errorf("generate placeholder for %s: %w", key, err)
+			}
+			mappings = append(mappings, CredentialMapping{
+				EnvVar:      key,
+				RealValue:   value,
+				Placeholder: placeholder,
+			})
+		}
+	}
+	return mappings, nil
+}
+
+// matchesSuffixPattern checks if an env var name matches any suffix pattern.
+func matchesSuffixPattern(key string) bool {
+	upper := strings.ToUpper(key)
+	for _, suffix := range credentialSuffixPatterns {
+		if strings.HasSuffix(upper, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// generatePlaceholder creates a credential placeholder string.
+func generatePlaceholder(sessionID string) (string, error) {
+	b := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%s:%s", placeholderPrefix, sessionID, hex.EncodeToString(b)), nil
+}
+
+// GenerateSessionID creates a unique session ID for this sandbox instance.
+func GenerateSessionID() (string, error) {
+	b := make([]byte, 8)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		return "", err
+	}
+	return "gw-" + hex.EncodeToString(b), nil
+}
+
+// SubstituteEnv replaces credential values with placeholders in the environment.
+// Returns the modified environment.
+func SubstituteEnv(env []string, mappings []CredentialMapping) []string {
+	// Build lookup: envVar -> placeholder
+	lookup := make(map[string]string, len(mappings))
+	for _, m := range mappings {
+		lookup[m.EnvVar] = m.Placeholder
+	}
+
+	result := make([]string, len(env))
+	for i, entry := range env {
+		idx := strings.Index(entry, "=")
+		if idx < 0 {
+			result[i] = entry
+			continue
+		}
+		key := entry[:idx]
+		if placeholder, ok := lookup[key]; ok {
+			result[i] = key + "=" + placeholder
+		} else {
+			result[i] = entry
+		}
+	}
+	return result
+}
+
+// sessionRequest is the JSON body for POST /api/sessions.
+type sessionRequest struct {
+	SessionID     string            `json:"session_id"`
+	ContainerName string            `json:"container_name"`
+	Mappings      map[string]string `json:"mappings"`
+	Labels        map[string]string `json:"labels"`
+	TTLSeconds    int               `json:"ttl_seconds"`
+}
+
+// RegisterSession registers credential mappings with greyproxy.
+func RegisterSession(sessionID, containerName string, mappings []CredentialMapping, apiBase string) error {
+	if apiBase == "" {
+		apiBase = greyproxyAPIBase
+	}
+
+	reqMappings := make(map[string]string, len(mappings))
+	reqLabels := make(map[string]string, len(mappings))
+	for _, m := range mappings {
+		reqMappings[m.Placeholder] = m.RealValue
+		reqLabels[m.Placeholder] = m.EnvVar
+	}
+
+	body := sessionRequest{
+		SessionID:     sessionID,
+		ContainerName: containerName,
+		Mappings:      reqMappings,
+		Labels:        reqLabels,
+		TTLSeconds:    defaultSessionTTL,
+	}
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal session request: %w", err)
+	}
+
+	resp, err := http.Post(apiBase+"/api/sessions", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("register session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("register session: HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// HeartbeatSession sends a heartbeat to keep the session alive.
+func HeartbeatSession(sessionID, apiBase string) error {
+	if apiBase == "" {
+		apiBase = greyproxyAPIBase
+	}
+
+	resp, err := http.Post(apiBase+"/api/sessions/"+sessionID+"/heartbeat", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("heartbeat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("session expired or not found")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("heartbeat: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// DeleteSession removes a session from greyproxy.
+func DeleteSession(sessionID, apiBase string) error {
+	if apiBase == "" {
+		apiBase = greyproxyAPIBase
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, apiBase+"/api/sessions/"+sessionID, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// StartHeartbeatLoop starts a goroutine that sends heartbeats every interval.
+// It re-registers the session if heartbeat returns 404.
+// Returns a stop function.
+func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMapping, apiBase string, debug bool) func() {
+	stop := make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				err := HeartbeatSession(sessionID, apiBase)
+				if err != nil {
+					if debug {
+						fmt.Fprintf(os.Stderr, "[greywall:cred] heartbeat failed: %v, re-registering\n", err)
+					}
+					// Re-register on failure (session may have expired or proxy restarted)
+					if regErr := RegisterSession(sessionID, containerName, mappings, apiBase); regErr != nil {
+						if debug {
+							fmt.Fprintf(os.Stderr, "[greywall:cred] re-register failed: %v\n", regErr)
+						}
+					}
+				}
+			}
+		}
+	}()
+
+	return func() {
+		close(stop)
+	}
+}
+
+// SensitiveGreyproxyFiles returns paths to greyproxy files that must not be
+// readable from inside the sandbox (encryption key and CA private key).
+func SensitiveGreyproxyFiles() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	return []string{
+		// Linux
+		home + "/.local/share/greyproxy/session.key",
+		home + "/.local/share/greyproxy/ca-key.pem",
+		// macOS
+		home + "/Library/Application Support/greyproxy/session.key",
+		home + "/Library/Application Support/greyproxy/ca-key.pem",
+	}
+}

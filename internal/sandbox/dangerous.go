@@ -52,6 +52,13 @@ func GetSensitiveProjectPaths(cwd string) []string {
 	return paths
 }
 
+// GetSensitiveSystemPaths returns paths to system files that must be denied
+// from inside the sandbox. These include greyproxy encryption keys and CA
+// private keys that, if leaked, would compromise credential protection.
+func GetSensitiveSystemPaths() []string {
+	return SensitiveGreyproxyFiles()
+}
+
 // GetDefaultWritePaths returns system paths that should be writable for commands to work.
 func GetDefaultWritePaths() []string {
 	home, _ := os.UserHomeDir()

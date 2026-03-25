@@ -253,6 +253,15 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 		rules = append(rules, "(allow file-read*)")
 	}
 
+	// Deny sensitive system files (greyproxy encryption key, CA private key)
+	for _, p := range GetSensitiveSystemPaths() {
+		rules = append(rules,
+			"(deny file-read-data",
+			fmt.Sprintf("  (literal %s)", escapePath(p)),
+			fmt.Sprintf("  (with message %q))", logTag),
+		)
+	}
+
 	// In both modes, deny specific paths (denyRead takes precedence).
 	// Must use file-read-data (not file-read*) because Seatbelt ignores
 	// wildcard denies when a specific allow (file-read-data) covers the same path.

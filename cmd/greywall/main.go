@@ -31,21 +31,22 @@ var (
 )
 
 var (
-	debug         bool
-	monitor       bool
-	settingsPath  string
-	proxyURL      string
-	httpProxyURL  string
-	dnsAddr       string
-	cmdString     string
-	exposePorts   []string
-	forwardPorts  []string
-	exitCode      int
-	showVersion   bool
-	linuxFeatures bool
-	learning      bool
-	profileName   string
-	autoProfile   bool
+	debug                  bool
+	monitor                bool
+	settingsPath           string
+	proxyURL               string
+	httpProxyURL           string
+	dnsAddr                string
+	cmdString              string
+	exposePorts            []string
+	forwardPorts           []string
+	exitCode               int
+	showVersion            bool
+	linuxFeatures          bool
+	learning               bool
+	profileName            string
+	autoProfile            bool
+	noCredentialProtection bool
 )
 
 func main() {
@@ -117,6 +118,7 @@ Configuration file format:
 	rootCmd.Flags().BoolVar(&learning, "learning", false, "Run in learning mode: trace filesystem access and generate a config profile")
 	rootCmd.Flags().StringVar(&profileName, "profile", "", "Load profiles by name, comma-separated (e.g. --profile claude,uv)")
 	rootCmd.Flags().BoolVar(&autoProfile, "auto-profile", false, "Use saved or built-in profile without prompting")
+	rootCmd.Flags().BoolVar(&noCredentialProtection, "no-credential-protection", false, "Disable credential substitution (real credentials visible in sandbox)")
 
 	// Hidden aliases for backwards compatibility
 	rootCmd.Flags().StringVar(&profileName, "template", "", "Alias for --profile (deprecated)")
@@ -383,6 +385,65 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "[greywall] Stripped dangerous env vars: %v\n", stripped)
 		}
 	}
+
+	// Credential substitution: detect credentials, register with greyproxy, rewrite env
+	var credSessionID string
+	var credMappings []sandbox.CredentialMapping
+	var stopHeartbeat func()
+	if !noCredentialProtection && !learning {
+		sessionID, err := sandbox.GenerateSessionID()
+		if err != nil {
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall:cred] failed to generate session ID: %v\n", err)
+			}
+		} else {
+			credSessionID = sessionID
+			detected, err := sandbox.DetectCredentials(hardenedEnv, sessionID)
+			if err != nil {
+				if debug {
+					fmt.Fprintf(os.Stderr, "[greywall:cred] failed to detect credentials: %v\n", err)
+				}
+			} else if len(detected) > 0 {
+				credMappings = detected
+				containerName := cmdName
+				if containerName == "" {
+					containerName = "sandbox"
+				}
+
+				if err := sandbox.RegisterSession(sessionID, containerName, detected, ""); err != nil {
+					if debug {
+						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to register session: %v (credentials will be visible)\n", err)
+					}
+					credMappings = nil // Don't substitute if registration failed
+				} else {
+					// Substitute credentials in the environment
+					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, detected)
+					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, detected, "", debug)
+
+					if debug {
+						var labels []string
+						for _, m := range detected {
+							labels = append(labels, m.EnvVar)
+						}
+						fmt.Fprintf(os.Stderr, "[greywall:cred] protected %d credentials: %s\n", len(detected), strings.Join(labels, ", "))
+					} else {
+						fmt.Fprintf(os.Stderr, "[greywall] Protected %d credential(s) via proxy substitution\n", len(detected))
+					}
+				}
+			} else if debug {
+				fmt.Fprintf(os.Stderr, "[greywall:cred] no credentials detected in environment\n")
+			}
+		}
+	}
+	// Ensure cleanup on exit
+	defer func() {
+		if stopHeartbeat != nil {
+			stopHeartbeat()
+		}
+		if credSessionID != "" && len(credMappings) > 0 {
+			_ = sandbox.DeleteSession(credSessionID, "")
+		}
+	}()
 
 	// Inject keyring secrets for active profiles (Linux only).
 	// This reads from the host keyring before sandboxing blocks D-Bus access.

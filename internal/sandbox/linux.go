@@ -710,6 +710,9 @@ func getMandatoryDenyPaths(cwd string) []string {
 		}
 	}
 
+	// Sensitive system files (greyproxy encryption key, CA private key)
+	paths = append(paths, GetSensitiveSystemPaths()...)
+
 	return paths
 }
 
