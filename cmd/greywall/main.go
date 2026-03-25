@@ -388,6 +388,19 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Check greyproxy version when --cred is used (requires global_credentials support)
+	if len(credLabels) > 0 {
+		status := proxy.Detect()
+		if !status.Running {
+			return fmt.Errorf("--cred requires greyproxy to be running (run 'greywall setup')")
+		}
+		// global_credentials support was added after v0.3.3
+		const minVersion = "0.3.4"
+		if status.Version != "" && status.Version != "dev" && proxy.IsOlderVersion(status.Version, minVersion) {
+			return fmt.Errorf("--cred requires greyproxy v%s or later (found v%s); upgrade with 'greywall setup'", minVersion, status.Version)
+		}
+	}
+
 	// Credential substitution: detect credentials, register with greyproxy, rewrite env
 	var credSessionID string
 	var credMappings []sandbox.CredentialMapping
