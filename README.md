@@ -63,6 +63,13 @@ curl -fsSL https://raw.githubusercontent.com/GreyhavenHQ/greywall/main/install.s
 go install github.com/GreyhavenHQ/greywall/cmd/greywall@latest
 ```
 
+**[mise](https://mise.jdx.dev/):**
+
+```bash
+mise use -g github:GreyhavenHQ/greywall
+mise use -g github:GreyhavenHQ/greyproxy
+```
+
 **Build from source:**
 
 ```bash
