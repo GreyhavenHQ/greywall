@@ -48,6 +48,7 @@ var (
 	autoProfile            bool
 	noCredentialProtection bool
 	credLabels             []string
+	skipVersionCheck       bool
 )
 
 func main() {
@@ -121,6 +122,8 @@ Configuration file format:
 	rootCmd.Flags().BoolVar(&autoProfile, "auto-profile", false, "Use saved or built-in profile without prompting")
 	rootCmd.Flags().BoolVar(&noCredentialProtection, "no-credential-protection", false, "Disable credential substitution (real credentials visible in sandbox)")
 	rootCmd.Flags().StringArrayVar(&credLabels, "cred", nil, "Inject a global credential by label (can be used multiple times, e.g. --cred ANTHROPIC_API_KEY)")
+	rootCmd.Flags().BoolVar(&skipVersionCheck, "skip-version-check", false, "Skip greyproxy version check (for testing)")
+	_ = rootCmd.Flags().MarkHidden("skip-version-check")
 
 	// Hidden aliases for backwards compatibility
 	rootCmd.Flags().StringVar(&profileName, "template", "", "Alias for --profile (deprecated)")
@@ -389,7 +392,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check greyproxy version when --cred is used (requires global_credentials support)
-	if len(credLabels) > 0 {
+	if len(credLabels) > 0 && !skipVersionCheck {
 		status := proxy.Detect()
 		if !status.Running {
 			return fmt.Errorf("--cred requires greyproxy to be running (run 'greywall setup')")
