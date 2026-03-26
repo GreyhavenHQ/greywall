@@ -16,12 +16,19 @@ import (
 
 // Config is the main configuration for greywall.
 type Config struct {
-	Extends    string           `json:"extends,omitempty"`
-	Network    NetworkConfig    `json:"network"`
-	Filesystem FilesystemConfig `json:"filesystem"`
-	Command    CommandConfig    `json:"command"`
-	SSH        SSHConfig        `json:"ssh"`
-	AllowPty   bool             `json:"allowPty,omitempty"`
+	Extends     string           `json:"extends,omitempty"`
+	Network     NetworkConfig    `json:"network"`
+	Filesystem  FilesystemConfig `json:"filesystem"`
+	Command     CommandConfig    `json:"command"`
+	SSH         SSHConfig        `json:"ssh"`
+	Credentials CredentialConfig `json:"credentials,omitempty"`
+	AllowPty    bool             `json:"allowPty,omitempty"`
+}
+
+// CredentialConfig defines credential injection and protection settings.
+type CredentialConfig struct {
+	Secrets []string `json:"secrets,omitempty"` // Additional env vars to treat as credentials
+	Inject  []string `json:"inject,omitempty"`  // Global credential labels to inject from proxy
 }
 
 // NetworkConfig defines network restrictions.
@@ -484,6 +491,11 @@ func Merge(base, override *Config) *Config {
 			// Boolean fields: true if either enables it
 			AllowAllCommands: base.SSH.AllowAllCommands || override.SSH.AllowAllCommands,
 			InheritDeny:      base.SSH.InheritDeny || override.SSH.InheritDeny,
+		},
+
+		Credentials: CredentialConfig{
+			Secrets: mergeStrings(base.Credentials.Secrets, override.Credentials.Secrets),
+			Inject:  mergeStrings(base.Credentials.Inject, override.Credentials.Inject),
 		},
 	}
 

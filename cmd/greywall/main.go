@@ -47,8 +47,8 @@ var (
 	profileName            string
 	autoProfile            bool
 	noCredentialProtection bool
-	credLabels             []string
-	protectVars            []string
+	injectLabels           []string
+	secretVars             []string
 	skipVersionCheck       bool
 )
 
@@ -86,6 +86,8 @@ Examples:
   greywall -p 3000 -c "npm run dev"                             # Expose port 3000
   greywall -f 5432 -- psql -h localhost                          # Forward host port into sandbox
   greywall --learning -- opencode                                # Learn filesystem needs
+  greywall --secret MY_VAR -- command            # Protect a custom env var
+  greywall --inject ANTHROPIC_API_KEY -- command  # Inject from proxy dashboard
 
 Configuration file format:
 {
@@ -122,8 +124,8 @@ Configuration file format:
 	rootCmd.Flags().StringVar(&profileName, "profile", "", "Load profiles by name, comma-separated (e.g. --profile claude,uv)")
 	rootCmd.Flags().BoolVar(&autoProfile, "auto-profile", false, "Use saved or built-in profile without prompting")
 	rootCmd.Flags().BoolVar(&noCredentialProtection, "no-credential-protection", false, "Disable credential substitution (real credentials visible in sandbox)")
-	rootCmd.Flags().StringArrayVar(&credLabels, "cred", nil, "Inject a global credential by label (can be used multiple times, e.g. --cred ANTHROPIC_API_KEY)")
-	rootCmd.Flags().StringArrayVar(&protectVars, "protect", nil, "Protect an additional env var not in the default list (can be used multiple times)")
+	rootCmd.Flags().StringArrayVar(&injectLabels, "inject", nil, "Inject a global credential by label (can be used multiple times, e.g. --inject ANTHROPIC_API_KEY)")
+	rootCmd.Flags().StringArrayVar(&secretVars, "secret", nil, "Protect an additional env var not in the default list (can be used multiple times)")
 	rootCmd.Flags().BoolVar(&skipVersionCheck, "skip-version-check", false, "Skip greyproxy version check (for testing)")
 	_ = rootCmd.Flags().MarkHidden("skip-version-check")
 
@@ -286,6 +288,10 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Merge config credentials with CLI flags (config + CLI, deduplicated)
+	secretVars = mergeUnique(cfg.Credentials.Secrets, secretVars)
+	injectLabels = mergeUnique(cfg.Credentials.Inject, injectLabels)
+
 	// CLI flags override config
 	if proxyURL != "" {
 		cfg.Network.ProxyURL = proxyURL
@@ -393,16 +399,16 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Check greyproxy version when --cred is used (requires global_credentials support)
-	if len(credLabels) > 0 && !skipVersionCheck {
+	// Check greyproxy version when --inject is used (requires global_credentials support)
+	if len(injectLabels) > 0 && !skipVersionCheck {
 		status := proxy.Detect()
 		if !status.Running {
-			return fmt.Errorf("--cred requires greyproxy to be running (run 'greywall setup')")
+			return fmt.Errorf("--inject requires greyproxy to be running (run 'greywall setup')")
 		}
 		// global_credentials support was added after v0.3.3
 		const minVersion = "0.3.4"
 		if status.Version != "" && status.Version != "dev" && proxy.IsOlderVersion(status.Version, minVersion) {
-			return fmt.Errorf("--cred requires greyproxy v%s or later (found v%s); upgrade with 'greywall setup'", minVersion, status.Version)
+			return fmt.Errorf("--inject requires greyproxy v%s or later (found v%s); upgrade with 'greywall setup'", minVersion, status.Version)
 		}
 	}
 
@@ -418,7 +424,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			credSessionID = sessionID
-			detected, err := sandbox.DetectCredentials(hardenedEnv, sessionID, protectVars)
+			detected, err := sandbox.DetectCredentials(hardenedEnv, sessionID, secretVars)
 			if err != nil {
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall:cred] failed to detect credentials: %v\n", err)
@@ -433,10 +439,10 @@ func runCommand(cmd *cobra.Command, args []string) error {
 				containerName = "sandbox"
 			}
 
-			if len(detected) > 0 || len(credLabels) > 0 {
+			if len(detected) > 0 || len(injectLabels) > 0 {
 				credMappings = detected
 
-				regResult, err := sandbox.RegisterSession(sessionID, containerName, detected, credLabels, "")
+				regResult, err := sandbox.RegisterSession(sessionID, containerName, detected, injectLabels, "")
 				if err != nil {
 					if debug {
 						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to register session: %v (credentials will be visible)\n", err)
@@ -453,7 +459,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 					// Substitute credentials in the environment
 					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, credMappings)
-					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, detected, credLabels, "", debug)
+					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, detected, injectLabels, "", debug)
 
 					if debug {
 						var labels []string
@@ -1011,4 +1017,29 @@ parseCommand:
 		fmt.Fprintf(os.Stderr, "[greywall:landlock-wrapper] Exec failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// mergeUnique combines two string slices, removing duplicates while preserving order.
+func mergeUnique(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	result := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	return result
 }
