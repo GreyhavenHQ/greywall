@@ -442,7 +442,23 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			if len(detected) > 0 || len(injectLabels) > 0 {
 				credMappings = detected
 
-				regResult, err := sandbox.RegisterSession(sessionID, containerName, detected, injectLabels, "")
+				// Build metadata for the dashboard
+				cwd, _ := os.Getwd()
+				meta := &sandbox.SessionMetadata{
+					Pwd: cwd,
+					Cmd: cmdName,
+					PID: strconv.Itoa(os.Getpid()),
+				}
+				if len(args) > 0 {
+					if binPath, err := exec.LookPath(args[0]); err == nil {
+						meta.BinaryPath = binPath
+					}
+					if len(args) > 1 {
+						meta.Args = strings.Join(args[1:], " ")
+					}
+				}
+
+				regResult, err := sandbox.RegisterSession(sessionID, containerName, detected, injectLabels, meta, "")
 				if err != nil {
 					if debug {
 						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to register session: %v (credentials will be visible)\n", err)
@@ -459,7 +475,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 					// Substitute credentials in the environment
 					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, credMappings)
-					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, detected, injectLabels, "", debug)
+					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, detected, injectLabels, meta, "", debug)
 
 					if debug {
 						var labels []string

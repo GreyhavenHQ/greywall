@@ -239,8 +239,18 @@ type sessionRequest struct {
 	ContainerName     string            `json:"container_name"`
 	Mappings          map[string]string `json:"mappings,omitempty"`
 	Labels            map[string]string `json:"labels,omitempty"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
 	GlobalCredentials []string          `json:"global_credentials,omitempty"`
 	TTLSeconds        int               `json:"ttl_seconds"`
+}
+
+// SessionMetadata holds context about the sandboxed process for dashboard display.
+type SessionMetadata struct {
+	Pwd        string // Working directory
+	Cmd        string // Command name
+	Args       string // Command arguments
+	BinaryPath string // Absolute path to the binary
+	PID        string // PID of the greywall process
 }
 
 // sessionResponse is the JSON response from POST /api/sessions.
@@ -259,8 +269,9 @@ type RegisterSessionResult struct {
 
 // RegisterSession registers credential mappings with greyproxy.
 // globalCredLabels is an optional list of global credential labels to resolve.
+// metadata is optional context about the sandboxed process (for dashboard display).
 // Returns the resolved global credential placeholders (label -> placeholder).
-func RegisterSession(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, apiBase string) (*RegisterSessionResult, error) {
+func RegisterSession(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, metadata *SessionMetadata, apiBase string) (*RegisterSessionResult, error) {
 	if apiBase == "" {
 		apiBase = greyproxyAPIBase
 	}
@@ -276,11 +287,32 @@ func RegisterSession(sessionID, containerName string, mappings []CredentialMappi
 		}
 	}
 
+	var reqMetadata map[string]string
+	if metadata != nil {
+		reqMetadata = make(map[string]string)
+		if metadata.Pwd != "" {
+			reqMetadata["pwd"] = metadata.Pwd
+		}
+		if metadata.Cmd != "" {
+			reqMetadata["cmd"] = metadata.Cmd
+		}
+		if metadata.Args != "" {
+			reqMetadata["args"] = metadata.Args
+		}
+		if metadata.BinaryPath != "" {
+			reqMetadata["binary_path"] = metadata.BinaryPath
+		}
+		if metadata.PID != "" {
+			reqMetadata["pid"] = metadata.PID
+		}
+	}
+
 	body := sessionRequest{
 		SessionID:         sessionID,
 		ContainerName:     containerName,
 		Mappings:          reqMappings,
 		Labels:            reqLabels,
+		Metadata:          reqMetadata,
 		GlobalCredentials: globalCredLabels,
 		TTLSeconds:        defaultSessionTTL,
 	}
@@ -353,7 +385,7 @@ func DeleteSession(sessionID, apiBase string) error {
 // StartHeartbeatLoop starts a goroutine that sends heartbeats every interval.
 // It re-registers the session if heartbeat returns 404.
 // Returns a stop function.
-func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, apiBase string, debug bool) func() {
+func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, metadata *SessionMetadata, apiBase string, debug bool) func() {
 	stop := make(chan struct{})
 
 	go func() {
@@ -371,7 +403,7 @@ func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMa
 						fmt.Fprintf(os.Stderr, "[greywall:cred] heartbeat failed: %v, re-registering\n", err)
 					}
 					// Re-register on failure (session may have expired or proxy restarted)
-					if _, regErr := RegisterSession(sessionID, containerName, mappings, globalCredLabels, apiBase); regErr != nil {
+					if _, regErr := RegisterSession(sessionID, containerName, mappings, globalCredLabels, metadata, apiBase); regErr != nil {
 						if debug {
 							fmt.Fprintf(os.Stderr, "[greywall:cred] re-register failed: %v\n", regErr)
 						}
