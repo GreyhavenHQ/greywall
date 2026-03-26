@@ -27,9 +27,10 @@ type Manager struct {
 	straceLogPath string // host-side temp file for strace output (Linux)
 	commandName   string // name of the command being learned
 	// macOS learning mode fields
-	learningRootPID int       // root PID of the sandboxed command (for eslogger PID tree tracking)
-	esloggerLogPath string    // temp file for eslogger output (macOS)
-	esloggerCmd     *exec.Cmd // eslogger subprocess (macOS)
+	learningRootPID   int               // root PID of the sandboxed command (for eslogger PID tree tracking)
+	esloggerLogPath   string            // temp file for eslogger output (macOS)
+	esloggerCmd       *exec.Cmd         // eslogger subprocess (macOS)
+	rewrittenEnvFiles map[string]string // original path -> temp path with credential placeholders
 }
 
 // NewManager creates a new sandbox manager.
@@ -59,6 +60,11 @@ func (m *Manager) SetCommandName(name string) {
 // IsLearning returns whether learning mode is enabled.
 func (m *Manager) IsLearning() bool {
 	return m.learning
+}
+
+// SetRewrittenEnvFiles sets the map of .env files rewritten with credential placeholders.
+func (m *Manager) SetRewrittenEnvFiles(files map[string]string) {
+	m.rewrittenEnvFiles = files
 }
 
 // Initialize sets up the sandbox infrastructure.
@@ -243,12 +249,18 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 			// In learning mode, run command directly (no sandbox-exec wrapping)
 			return command, nil
 		}
-		return WrapCommandMacOS(m.config, command, m.exposedPorts, m.debug)
+		return WrapCommandMacOS(m.config, command, m.exposedPorts, m.rewrittenEnvFiles, m.debug)
 	case platform.Linux:
 		if m.learning {
 			return m.wrapCommandLearning(command)
 		}
-		return WrapCommandLinux(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.forwardBridge, m.dbusBridge, m.tun2socksPath, m.debug)
+		return WrapCommandLinuxWithOptions(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.forwardBridge, m.dbusBridge, m.tun2socksPath, LinuxSandboxOptions{
+			UseLandlock:       true,
+			UseSeccomp:        true,
+			UseEBPF:           true,
+			Debug:             m.debug,
+			RewrittenEnvFiles: m.rewrittenEnvFiles,
+		})
 	default:
 		return "", fmt.Errorf("unsupported platform: %s", plat)
 	}

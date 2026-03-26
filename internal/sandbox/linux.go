@@ -126,6 +126,10 @@ type LinuxSandboxOptions struct {
 	Learning bool
 	// Path to host-side strace log file (bind-mounted into sandbox)
 	StraceLogPath string
+	// RewrittenEnvFiles maps original .env file paths to temp files containing
+	// credential-substituted content. When set, these files are bind-mounted
+	// read-only instead of being masked with an empty file.
+	RewrittenEnvFiles map[string]string
 }
 
 // NewProxyBridge creates a Unix socket bridge to an external SOCKS5 proxy.
@@ -719,7 +723,7 @@ func getMandatoryDenyPaths(cwd string) []string {
 // buildDenyByDefaultMounts builds bwrap arguments for deny-by-default filesystem isolation.
 // Starts with --tmpfs / (empty root), then selectively mounts system paths read-only,
 // CWD read-write, and user tooling paths read-only. Sensitive files within CWD are masked.
-func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBridge, debug bool) []string {
+func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBridge, rewrittenEnvFiles map[string]string, debug bool) []string {
 	var args []string
 	home, _ := os.UserHomeDir()
 
@@ -895,14 +899,24 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 		}
 	}
 
-	// Mask sensitive project files within CWD by overlaying an empty regular file.
-	// We use an empty file instead of /dev/null because Landlock's READ_FILE right
-	// doesn't cover character devices, causing "Permission denied" on /dev/null mounts.
+	// Handle sensitive project files within CWD.
+	// If credential substitution has rewritten a file, bind-mount the rewritten
+	// version (with placeholders) so the sandboxed process can read it.
+	// Otherwise, mask with an empty file to prevent credential leakage.
 	if cwd != "" {
 		var emptyFile string
 		for _, f := range SensitiveProjectFiles {
 			p := filepath.Join(cwd, f)
-			if fileExists(p) {
+			if !fileExists(p) {
+				continue
+			}
+			if rewrittenPath, ok := rewrittenEnvFiles[p]; ok {
+				args = append(args, "--ro-bind", rewrittenPath, p)
+				if debug {
+					fmt.Fprintf(os.Stderr, "[greywall:linux] Mounting rewritten %s (credentials replaced with placeholders)\n", f)
+				}
+			} else {
+				// No rewritten version; mask with empty file.
 				if emptyFile == "" {
 					emptyFile = filepath.Join(os.TempDir(), "greywall", "empty")
 					_ = os.MkdirAll(filepath.Dir(emptyFile), 0o750)
@@ -1039,7 +1053,7 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		if opts.Debug {
 			fmt.Fprintf(os.Stderr, "[greywall:linux] DefaultDenyRead mode enabled - tmpfs root with selective mounts\n")
 		}
-		bwrapArgs = append(bwrapArgs, buildDenyByDefaultMounts(cfg, cwd, dbusBridge, opts.Debug)...)
+		bwrapArgs = append(bwrapArgs, buildDenyByDefaultMounts(cfg, cwd, dbusBridge, opts.RewrittenEnvFiles, opts.Debug)...)
 	default:
 		// Legacy mode: bind entire root filesystem read-only
 		bwrapArgs = append(bwrapArgs, "--ro-bind", "/", "/")
@@ -1157,9 +1171,9 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		// subdirectory dangerous files without full tree walks that hang on large dirs.
 		mandatoryDeny := getMandatoryDenyPaths(cwd)
 
-		// In deny-by-default mode, sensitive project files are already masked
-		// with --ro-bind /dev/null by buildDenyByDefaultMounts(). Skip them here
-		// to avoid overriding the /dev/null mask with a real ro-bind.
+		// In deny-by-default mode, sensitive project files are already handled
+		// by buildDenyByDefaultMounts() (either masked with empty file or mounted
+		// with rewritten content). Skip them here to avoid overriding.
 		maskedPaths := make(map[string]bool)
 		if defaultDenyRead {
 			for _, f := range SensitiveProjectFiles {

@@ -50,6 +50,7 @@ type MacOSSandboxParams struct {
 	AllowPty                bool
 	AllowGitConfig          bool
 	Shell                   string
+	RewrittenEnvFiles       map[string]string // original path -> rewritten temp path
 }
 
 // GlobToRegex converts a glob pattern to a regex for macOS sandbox profiles.
@@ -152,7 +153,7 @@ func getTmpdirParent() []string {
 }
 
 // generateReadRules generates filesystem read rules for the sandbox profile.
-func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths []string, logTag string) []string {
+func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths []string, rewrittenEnvFiles map[string]string, logTag string) []string {
 	var rules []string
 
 	if defaultDenyRead {
@@ -229,24 +230,35 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 			}
 		}
 
-		// Deny sensitive files within CWD.
+		// Deny sensitive files within CWD, unless credential substitution has
+		// processed them (rewrittenEnvFiles). On macOS we cannot bind-mount
+		// rewritten files, so we allow read access and rely on proxy-level
+		// credential substitution to protect secrets in HTTP requests.
 		// Must use file-read-data (not file-read*) because Seatbelt ignores
 		// wildcard denies when a specific allow (file-read-data) covers the same path.
 		if cwd != "" {
+			var deniedFiles int
 			for _, f := range SensitiveProjectFiles {
 				p := filepath.Join(cwd, f)
+				if _, ok := rewrittenEnvFiles[p]; ok {
+					continue // credential substitution active; allow read
+				}
 				rules = append(rules,
 					"(deny file-read-data",
 					fmt.Sprintf("  (literal %s)", escapePath(p)),
 					fmt.Sprintf("  (with message %q))", logTag),
 				)
+				deniedFiles++
 			}
-			// Also deny .env.* pattern via regex
-			rules = append(rules,
-				"(deny file-read-data",
-				fmt.Sprintf("  (regex %s)", escapePath("^"+regexp.QuoteMeta(cwd)+"/\\.env\\..*$")),
-				fmt.Sprintf("  (with message %q))", logTag),
-			)
+			// Only add the .env.* regex deny if not all files are handled by
+			// credential substitution.
+			if deniedFiles > 0 {
+				rules = append(rules,
+					"(deny file-read-data",
+					fmt.Sprintf("  (regex %s)", escapePath("^"+regexp.QuoteMeta(cwd)+"/\\.env\\..*$")),
+					fmt.Sprintf("  (with message %q))", logTag),
+				)
+			}
 		}
 	} else {
 		// Allow all reads by default
@@ -632,7 +644,7 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 
 	// Read rules
 	profile.WriteString("; File read\n")
-	for _, rule := range generateReadRules(params.DefaultDenyRead, params.Cwd, params.ReadAllowPaths, params.ReadDenyPaths, logTag) {
+	for _, rule := range generateReadRules(params.DefaultDenyRead, params.Cwd, params.ReadAllowPaths, params.ReadDenyPaths, params.RewrittenEnvFiles, logTag) {
 		profile.WriteString(rule + "\n")
 	}
 	profile.WriteString("\n")
@@ -657,7 +669,7 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 }
 
 // WrapCommandMacOS wraps a command with macOS sandbox restrictions.
-func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, debug bool) (string, error) {
+func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, rewrittenEnvFiles map[string]string, debug bool) (string, error) {
 	cwd, _ := os.Getwd()
 
 	// Build allow paths: default + configured
@@ -726,6 +738,7 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, de
 		WriteDenyPaths:          cfg.Filesystem.DenyWrite,
 		AllowPty:                cfg.AllowPty,
 		AllowGitConfig:          cfg.Filesystem.AllowGitConfig,
+		RewrittenEnvFiles:       rewrittenEnvFiles,
 	}
 
 	if debug && len(exposedPorts) > 0 {

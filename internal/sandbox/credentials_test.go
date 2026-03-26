@@ -1,6 +1,8 @@
 package sandbox
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -307,6 +309,374 @@ func TestMatchesSuffixPattern(t *testing.T) {
 		got := matchesSuffixPattern(tt.key)
 		if got != tt.expect {
 			t.Errorf("matchesSuffixPattern(%q) = %v, want %v", tt.key, got, tt.expect)
+		}
+	}
+}
+
+func TestSubstituteEnvFileContent_ExactValueMatch(t *testing.T) {
+	data := []byte("OPENAI_API_KEY=sk-real-key\nPATH=/usr/bin\nDB_PASSWORD=secret123\n")
+	valueLookup := map[string]string{
+		"sk-real-key": "placeholder-1",
+		"secret123":   "placeholder-2",
+	}
+
+	result, count := substituteEnvFileContent(data, nil, valueLookup)
+	if count != 2 {
+		t.Fatalf("expected 2 substitutions, got %d", count)
+	}
+
+	lines := strings.Split(string(result), "\n")
+	if lines[0] != "OPENAI_API_KEY=placeholder-1" {
+		t.Errorf("line 0: got %q", lines[0])
+	}
+	if lines[1] != "PATH=/usr/bin" {
+		t.Errorf("line 1: got %q", lines[1])
+	}
+	if lines[2] != "DB_PASSWORD=placeholder-2" {
+		t.Errorf("line 2: got %q", lines[2])
+	}
+}
+
+func TestSubstituteEnvFileContent_KeyMatch(t *testing.T) {
+	// .env file has a different value than the environment variable,
+	// but key-based matching should still replace it.
+	data := []byte("ANTHROPIC_API_KEY=hello\nPLAIN=world\n")
+	keyLookup := map[string]string{
+		"ANTHROPIC_API_KEY": "greyproxy:credential:v1:test:abc",
+	}
+
+	result, count := substituteEnvFileContent(data, keyLookup, nil)
+	if count != 1 {
+		t.Fatalf("expected 1 substitution, got %d", count)
+	}
+
+	lines := strings.Split(string(result), "\n")
+	if lines[0] != "ANTHROPIC_API_KEY=greyproxy:credential:v1:test:abc" {
+		t.Errorf("line 0: got %q", lines[0])
+	}
+	if lines[1] != "PLAIN=world" {
+		t.Errorf("line 1 should be unchanged: got %q", lines[1])
+	}
+}
+
+func TestSubstituteEnvFileContent_KeyMatchWithExportPrefix(t *testing.T) {
+	data := []byte("export ANTHROPIC_API_KEY=hello\n")
+	keyLookup := map[string]string{
+		"ANTHROPIC_API_KEY": "placeholder",
+	}
+
+	result, count := substituteEnvFileContent(data, keyLookup, nil)
+	if count != 1 {
+		t.Fatalf("expected 1 substitution, got %d", count)
+	}
+
+	lines := strings.Split(string(result), "\n")
+	if lines[0] != "export ANTHROPIC_API_KEY=placeholder" {
+		t.Errorf("line 0: got %q", lines[0])
+	}
+}
+
+func TestSubstituteEnvFileContent_KeyMatchPriorityOverValue(t *testing.T) {
+	// When both key and value match, key-based placeholder should win.
+	data := []byte("ANTHROPIC_API_KEY=sk-real\n")
+	keyLookup := map[string]string{
+		"ANTHROPIC_API_KEY": "key-placeholder",
+	}
+	valueLookup := map[string]string{
+		"sk-real": "value-placeholder",
+	}
+
+	result, count := substituteEnvFileContent(data, keyLookup, valueLookup)
+	if count != 1 {
+		t.Fatalf("expected 1 substitution, got %d", count)
+	}
+
+	lines := strings.Split(string(result), "\n")
+	if lines[0] != "ANTHROPIC_API_KEY=key-placeholder" {
+		t.Errorf("key-based match should take priority: got %q", lines[0])
+	}
+}
+
+func TestSubstituteEnvFileContent_QuotedValues(t *testing.T) {
+	data := []byte(`OPENAI_API_KEY="sk-real-key"
+DB_PASSWORD='secret123'
+`)
+	keyLookup := map[string]string{
+		"OPENAI_API_KEY": "placeholder-1",
+		"DB_PASSWORD":    "placeholder-2",
+	}
+
+	result, count := substituteEnvFileContent(data, keyLookup, nil)
+	if count != 2 {
+		t.Fatalf("expected 2 substitutions, got %d", count)
+	}
+
+	lines := strings.Split(string(result), "\n")
+	if lines[0] != `OPENAI_API_KEY="placeholder-1"` {
+		t.Errorf("line 0: got %q", lines[0])
+	}
+	if lines[1] != `DB_PASSWORD='placeholder-2'` {
+		t.Errorf("line 1: got %q", lines[1])
+	}
+}
+
+func TestSubstituteEnvFileContent_CommentsAndBlanks(t *testing.T) {
+	data := []byte("# This is a comment\n\nOPENAI_API_KEY=sk-real\n# Another comment\nPLAIN=hello\n")
+	keyLookup := map[string]string{
+		"OPENAI_API_KEY": "placeholder",
+	}
+
+	result, count := substituteEnvFileContent(data, keyLookup, nil)
+	if count != 1 {
+		t.Fatalf("expected 1 substitution, got %d", count)
+	}
+
+	lines := strings.Split(string(result), "\n")
+	if lines[0] != "# This is a comment" {
+		t.Errorf("comment not preserved: got %q", lines[0])
+	}
+	if lines[1] != "" {
+		t.Errorf("blank line not preserved: got %q", lines[1])
+	}
+	if lines[2] != "OPENAI_API_KEY=placeholder" {
+		t.Errorf("substitution failed: got %q", lines[2])
+	}
+	if lines[4] != "PLAIN=hello" {
+		t.Errorf("non-credential line modified: got %q", lines[4])
+	}
+}
+
+func TestSubstituteEnvFileContent_InlineReplacement(t *testing.T) {
+	data := []byte("DATABASE_URL=postgres://user:secret123@host/db\n")
+	valueLookup := map[string]string{
+		"secret123": "placeholder",
+	}
+
+	result, count := substituteEnvFileContent(data, nil, valueLookup)
+	if count != 1 {
+		t.Fatalf("expected 1 substitution, got %d", count)
+	}
+
+	expected := "DATABASE_URL=postgres://user:placeholder@host/db\n" //nolint:gosec // test data, not real credentials
+	if string(result) != expected {
+		t.Errorf("got %q, want %q", string(result), expected)
+	}
+}
+
+func TestSubstituteEnvFileContent_NoMatch(t *testing.T) {
+	data := []byte("PLAIN_VAR=hello\nANOTHER=world\n")
+	valueLookup := map[string]string{
+		"sk-real": "placeholder",
+	}
+
+	result, count := substituteEnvFileContent(data, nil, valueLookup)
+	if count != 0 {
+		t.Fatalf("expected 0 substitutions, got %d", count)
+	}
+	if string(result) != string(data) {
+		t.Errorf("content should be unchanged")
+	}
+}
+
+func TestRewriteEnvFiles(t *testing.T) {
+	// Create a temp dir with a .env file.
+	tmpDir := t.TempDir()
+	envContent := "OPENAI_API_KEY=sk-real-key\nPLAIN=hello\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, ".env"), []byte(envContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	credKeys := map[string]bool{"OPENAI_API_KEY": true}
+
+	result, err := RewriteEnvFiles(tmpDir, "test-session", credKeys, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil {
+		t.Fatal("expected result, got nil")
+	}
+
+	envPath := filepath.Join(tmpDir, ".env")
+	tmpPath, ok := result.RewrittenFiles[envPath]
+	if !ok {
+		t.Fatalf(".env not in rewritten map: %v", result.RewrittenFiles)
+	}
+
+	// Read the rewritten file.
+	data, err := os.ReadFile(tmpPath) //nolint:gosec // test reads a temp file by variable path
+	if err != nil {
+		t.Fatalf("failed to read rewritten file: %v", err)
+	}
+
+	if !strings.Contains(string(data), placeholderPrefix) {
+		t.Errorf("rewritten file should contain placeholder prefix: %s", string(data))
+	}
+	if strings.Contains(string(data), "sk-real-key") {
+		t.Errorf("rewritten file should not contain real key: %s", string(data))
+	}
+	if !strings.Contains(string(data), "PLAIN=hello") {
+		t.Errorf("rewritten file should preserve non-credential lines: %s", string(data))
+	}
+
+	// Verify file mappings were generated.
+	if len(result.FileMappings) != 1 {
+		t.Fatalf("expected 1 file mapping, got %d", len(result.FileMappings))
+	}
+	fm := result.FileMappings[0]
+	if fm.EnvVar != "OPENAI_API_KEY" {
+		t.Errorf("expected EnvVar OPENAI_API_KEY, got %s", fm.EnvVar)
+	}
+	if fm.RealValue != "sk-real-key" {
+		t.Errorf("expected RealValue sk-real-key, got %s", fm.RealValue)
+	}
+	if !strings.HasPrefix(fm.Placeholder, placeholderPrefix) {
+		t.Errorf("placeholder should start with prefix: %s", fm.Placeholder)
+	}
+
+	// Cleanup.
+	CleanupRewrittenFiles(result.RewrittenFiles)
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Error("temp file should be cleaned up")
+	}
+}
+
+func TestRewriteEnvFiles_DifferentValuesPerFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, ".env"), []byte("ANTHROPIC_API_KEY=val1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, ".env.local"), []byte("ANTHROPIC_API_KEY=val2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	credKeys := map[string]bool{"ANTHROPIC_API_KEY": true}
+
+	result, err := RewriteEnvFiles(tmpDir, "test-session", credKeys, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil {
+		t.Fatal("expected result, got nil")
+	}
+
+	// Both files should be rewritten.
+	if len(result.RewrittenFiles) != 2 {
+		t.Fatalf("expected 2 rewritten files, got %d", len(result.RewrittenFiles))
+	}
+
+	// Should have 2 file mappings with different real values and different placeholders.
+	if len(result.FileMappings) != 2 {
+		t.Fatalf("expected 2 file mappings, got %d", len(result.FileMappings))
+	}
+
+	values := make(map[string]string) // realValue -> placeholder
+	for _, fm := range result.FileMappings {
+		if fm.EnvVar != "ANTHROPIC_API_KEY" {
+			t.Errorf("unexpected EnvVar: %s", fm.EnvVar)
+		}
+		values[fm.RealValue] = fm.Placeholder
+	}
+
+	if _, ok := values["val1"]; !ok {
+		t.Error("missing mapping for val1 (.env)")
+	}
+	if _, ok := values["val2"]; !ok {
+		t.Error("missing mapping for val2 (.env.local)")
+	}
+
+	// Placeholders must be different.
+	if values["val1"] == values["val2"] {
+		t.Error("placeholders for different values should be unique")
+	}
+
+	// Verify rewritten file contents have different placeholders.
+	for origPath, tmpPath := range result.RewrittenFiles {
+		data, err := os.ReadFile(tmpPath) //nolint:gosec // test
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := string(data)
+		if strings.Contains(content, "val1") || strings.Contains(content, "val2") {
+			t.Errorf("%s still contains real value: %s", origPath, content)
+		}
+		if !strings.Contains(content, placeholderPrefix) {
+			t.Errorf("%s missing placeholder: %s", origPath, content)
+		}
+	}
+
+	CleanupRewrittenFiles(result.RewrittenFiles)
+}
+
+func TestRewriteEnvFiles_NoCredentials(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, ".env"), []byte("PLAIN=hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	credKeys := map[string]bool{"OPENAI_API_KEY": true}
+
+	// .env has no matching credential keys; should return nil.
+	result, err := RewriteEnvFiles(tmpDir, "test", credKeys, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Errorf("expected nil when no credentials match, got %v", result)
+	}
+}
+
+func TestRewriteEnvFiles_NoFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	credKeys := map[string]bool{"OPENAI_API_KEY": true}
+
+	result, err := RewriteEnvFiles(tmpDir, "test", credKeys, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Errorf("expected nil when no .env files exist, got %v", result)
+	}
+}
+
+func TestRewriteEnvFiles_EmptyKeys(t *testing.T) {
+	result, err := RewriteEnvFiles("/tmp", "test", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Error("expected nil for empty keys")
+	}
+}
+
+func TestRewriteEnvFiles_EmptyCwd(t *testing.T) {
+	credKeys := map[string]bool{"KEY": true}
+	result, err := RewriteEnvFiles("", "test", credKeys, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Error("expected nil for empty cwd")
+	}
+}
+
+func TestParseEnvFile(t *testing.T) {
+	data := []byte("# comment\nKEY1=val1\nexport KEY2=\"val2\"\nKEY3='val3'\n\nPLAIN=hello\n")
+	result := parseEnvFile(data)
+
+	if len(result) != 4 {
+		t.Fatalf("expected 4 entries, got %d: %+v", len(result), result)
+	}
+
+	expected := []envKeyValue{
+		{key: "KEY1", value: "val1"},
+		{key: "KEY2", value: "val2"},
+		{key: "KEY3", value: "val3"},
+		{key: "PLAIN", value: "hello"},
+	}
+
+	for i, want := range expected {
+		if result[i].key != want.key || result[i].value != want.value {
+			t.Errorf("entry %d: got {%s, %s}, want {%s, %s}", i, result[i].key, result[i].value, want.key, want.value)
 		}
 	}
 }

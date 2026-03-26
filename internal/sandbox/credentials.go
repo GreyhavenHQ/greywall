@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -113,9 +115,9 @@ var nonCredentialVars = map[string]bool{
 	"PWD": true, "OLDPWD": true, "SHLVL": true,
 	"EDITOR": true, "VISUAL": true, "PAGER": true,
 	"DISPLAY": true, "XDG_SESSION_TYPE": true,
-	"GREYWALL_SANDBOX": true,
+	"GREYWALL_SANDBOX":               true,
 	"GOOGLE_APPLICATION_CREDENTIALS": true, // file path, not a credential
-	"STRIPE_PUBLISHABLE_KEY": true,          // public key, not secret
+	"STRIPE_PUBLISHABLE_KEY":         true, // public key, not secret
 }
 
 // CredentialMapping holds a detected credential and its placeholder.
@@ -425,6 +427,286 @@ func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMa
 
 	return func() {
 		close(stop)
+	}
+}
+
+// RewriteEnvFilesResult holds the output of RewriteEnvFiles.
+type RewriteEnvFilesResult struct {
+	// RewrittenFiles maps original .env path to the temp file with placeholders.
+	RewrittenFiles map[string]string
+	// FileMappings contains credential mappings for values found in .env files.
+	// These must be registered with the proxy so it can substitute them.
+	// Each .env file value gets its own unique placeholder, even if the same
+	// key appears in multiple files with different values.
+	FileMappings []CredentialMapping
+}
+
+// RewriteEnvFiles reads each sensitive project file in cwd, replaces credential
+// values with their placeholders, and writes the result to a temp file.
+//
+// For each credential key found in a file, a unique placeholder is generated
+// for that file's value. This ensures that different .env files with different
+// values for the same key (e.g., .env has KEY=val1, .env.local has KEY=val2)
+// each get distinct placeholders that map to the correct real value.
+//
+// The returned FileMappings must be registered with the proxy alongside the
+// env-based mappings so the proxy can substitute them in HTTP requests.
+func RewriteEnvFiles(cwd, sessionID string, credentialKeys map[string]bool, debug bool) (*RewriteEnvFilesResult, error) {
+	if cwd == "" || len(credentialKeys) == 0 {
+		return nil, nil
+	}
+
+	rewritten := make(map[string]string)
+	var fileMappings []CredentialMapping
+	tmpDir := filepath.Join(os.TempDir(), "greywall", "env-rewrite")
+
+	for _, f := range SensitiveProjectFiles {
+		p := filepath.Join(cwd, f)
+		data, err := os.ReadFile(p) //nolint:gosec // path is constructed from a fixed list of filenames joined to cwd
+		if err != nil {
+			continue // file doesn't exist or can't be read
+		}
+
+		// Parse the file and generate per-file placeholders for credential keys.
+		fileKeyLookup := make(map[string]string)
+		var fileCredMappings []CredentialMapping
+		parsed := parseEnvFile(data)
+		for _, kv := range parsed {
+			if !credentialKeys[kv.key] || kv.value == "" {
+				continue
+			}
+			placeholder, err := generatePlaceholder(sessionID)
+			if err != nil {
+				return nil, fmt.Errorf("generate placeholder for %s in %s: %w", kv.key, f, err)
+			}
+			fileKeyLookup[kv.key] = placeholder
+			fileCredMappings = append(fileCredMappings, CredentialMapping{
+				EnvVar:      kv.key,
+				RealValue:   kv.value,
+				Placeholder: placeholder,
+			})
+		}
+
+		if len(fileCredMappings) == 0 {
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall:cred] %s: no credential keys found, will be masked\n", f)
+			}
+			continue
+		}
+
+		// Rewrite the file using the per-file key lookup.
+		replaced, _ := substituteEnvFileContent(data, fileKeyLookup, nil)
+
+		// Write rewritten content to temp file.
+		if err := os.MkdirAll(tmpDir, 0o750); err != nil {
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall:cred] failed to create temp dir for %s: %v\n", f, err)
+			}
+			continue
+		}
+
+		tmpFile, err := os.CreateTemp(tmpDir, "env-*")
+		if err != nil {
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall:cred] failed to create temp file for %s: %v\n", f, err)
+			}
+			continue
+		}
+
+		if _, err := tmpFile.Write(replaced); err != nil {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpFile.Name())
+			if debug {
+				fmt.Fprintf(os.Stderr, "[greywall:cred] failed to write rewritten %s: %v\n", f, err)
+			}
+			continue
+		}
+		_ = tmpFile.Chmod(0o444)
+		_ = tmpFile.Close()
+
+		rewritten[p] = tmpFile.Name()
+		fileMappings = append(fileMappings, fileCredMappings...)
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:cred] rewrote %s with %d credential(s) replaced\n", f, len(fileCredMappings))
+		}
+	}
+
+	if len(rewritten) == 0 {
+		return nil, nil
+	}
+	return &RewriteEnvFilesResult{
+		RewrittenFiles: rewritten,
+		FileMappings:   fileMappings,
+	}, nil
+}
+
+// envKeyValue holds a parsed key-value pair from a .env file.
+type envKeyValue struct {
+	key   string
+	value string // unquoted value
+}
+
+// parseEnvFile extracts key-value pairs from .env file content.
+// It handles comments, blank lines, optional "export" prefix, and quoted values.
+func parseEnvFile(data []byte) []envKeyValue {
+	var result []envKeyValue
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		eqIdx := strings.Index(trimmed, "=")
+		if eqIdx < 0 {
+			continue
+		}
+
+		key := trimmed[:eqIdx]
+		value := trimmed[eqIdx+1:]
+
+		// Strip "export " prefix.
+		key = strings.TrimSpace(key)
+		if strings.HasPrefix(key, "export ") {
+			key = strings.TrimSpace(key[len("export "):])
+		}
+
+		// Strip quotes.
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') ||
+				(value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+
+		result = append(result, envKeyValue{key: key, value: value})
+	}
+	return result
+}
+
+// substituteEnvFileContent replaces credential values in .env file content.
+// It uses two lookup strategies:
+//   - keyLookup: envVar name -> placeholder (matches KEY in KEY=value lines)
+//   - valueLookup: real credential value -> placeholder (matches values inline)
+//
+// Key-based matching takes priority. Value-based matching handles inline
+// occurrences (e.g., credentials embedded in connection strings).
+// Returns the rewritten content and the number of substitutions made.
+func substituteEnvFileContent(data []byte, keyLookup, valueLookup map[string]string) ([]byte, int) {
+	var buf bytes.Buffer
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	count := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			buf.WriteString(line)
+			buf.WriteByte('\n')
+			continue
+		}
+
+		eqIdx := strings.Index(line, "=")
+		if eqIdx < 0 {
+			buf.WriteString(line)
+			buf.WriteByte('\n')
+			continue
+		}
+
+		key := line[:eqIdx]
+		value := line[eqIdx+1:]
+
+		// Strip optional "export " prefix for key matching.
+		matchKey := strings.TrimSpace(key)
+		if strings.HasPrefix(matchKey, "export ") {
+			matchKey = strings.TrimSpace(matchKey[len("export "):])
+		}
+
+		// Strip quotes for value matching.
+		unquoted := value
+		quote := ""
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') ||
+				(value[0] == '\'' && value[len(value)-1] == '\'') {
+				quote = string(value[0])
+				unquoted = value[1 : len(value)-1]
+			}
+		}
+
+		// Priority 1: match by key name (handles the case where .env file
+		// value differs from the environment variable value).
+		if placeholder, ok := keyLookup[matchKey]; ok {
+			buf.WriteString(key)
+			buf.WriteByte('=')
+			buf.WriteString(quote)
+			buf.WriteString(placeholder)
+			buf.WriteString(quote)
+			buf.WriteByte('\n')
+			count++
+			continue
+		}
+
+		// Priority 2: exact value match.
+		if placeholder, ok := valueLookup[unquoted]; ok {
+			buf.WriteString(key)
+			buf.WriteByte('=')
+			buf.WriteString(quote)
+			buf.WriteString(placeholder)
+			buf.WriteString(quote)
+			buf.WriteByte('\n')
+			count++
+			continue
+		}
+
+		// Priority 3: inline value replacement (e.g., DATABASE_URL=postgres://user:secret@host/db).
+		replaced := unquoted
+		lineCount := 0
+		for val, ph := range valueLookup {
+			if strings.Contains(replaced, val) {
+				replaced = strings.ReplaceAll(replaced, val, ph)
+				lineCount++
+			}
+		}
+		if lineCount > 0 {
+			buf.WriteString(key)
+			buf.WriteByte('=')
+			buf.WriteString(quote)
+			buf.WriteString(replaced)
+			buf.WriteString(quote)
+			buf.WriteByte('\n')
+			count += lineCount
+			continue
+		}
+
+		// No match, preserve original line.
+		buf.WriteString(line)
+		buf.WriteByte('\n')
+	}
+
+	return buf.Bytes(), count
+}
+
+// CleanupRewrittenFiles removes temp files created by RewriteEnvFiles.
+func CleanupRewrittenFiles(rewrittenFiles map[string]string) {
+	for _, tmpPath := range rewrittenFiles {
+		_ = os.Remove(tmpPath)
+	}
+}
+
+// WarnMaskedEnvFiles prints a warning for .env files that exist but will be
+// masked (shown as empty) because credential substitution is not active.
+func WarnMaskedEnvFiles(cwd string) {
+	if cwd == "" {
+		return
+	}
+	for _, f := range SensitiveProjectFiles {
+		p := filepath.Join(cwd, f)
+		if _, err := os.Stat(p); err == nil {
+			fmt.Fprintf(os.Stderr, "[greywall:cred] WARNING: %s will appear empty inside the sandbox because credential substitution is not active\n", f)
+		}
 	}
 }
 

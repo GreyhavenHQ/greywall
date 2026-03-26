@@ -385,16 +385,6 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	sandboxedCommand, err := manager.WrapCommand(command)
-	if err != nil {
-		return fmt.Errorf("failed to wrap command: %w", err)
-	}
-
-	if debug {
-		fmt.Fprintf(os.Stderr, "[greywall] Sandboxed command: %s\n", sandboxedCommand)
-		fmt.Fprintf(os.Stderr, "[greywall] Executing: sh -c %q\n", sandboxedCommand)
-	}
-
 	hardenedEnv := sandbox.GetHardenedEnv()
 	if debug {
 		if stripped := sandbox.GetStrippedEnvVars(os.Environ()); len(stripped) > 0 {
@@ -415,10 +405,14 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Credential substitution: detect credentials, register with greyproxy, rewrite env
+	// Credential substitution: detect credentials, rewrite .env files, register
+	// with greyproxy, and substitute env vars. This must happen before WrapCommand
+	// so that rewritten .env files are available for bind-mounting into the sandbox.
 	var credSessionID string
 	var credMappings []sandbox.CredentialMapping
+	var rewrittenEnvFiles map[string]string
 	var stopHeartbeat func()
+	credSubstitutionActive := false
 	if !noCredentialProtection && !learning {
 		sessionID, err := sandbox.GenerateSessionID()
 		if err != nil {
@@ -443,10 +437,34 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			}
 
 			if len(detected) > 0 || len(injectLabels) > 0 {
-				credMappings = detected
+				// Build the set of credential key names for .env file scanning.
+				credentialKeys := make(map[string]bool, len(detected)+len(injectLabels))
+				for _, m := range detected {
+					credentialKeys[m.EnvVar] = true
+				}
+				for _, label := range injectLabels {
+					credentialKeys[label] = true
+				}
+
+				// Rewrite .env files BEFORE registration so file-specific
+				// mappings can be included in the session.
+				cwd, _ := os.Getwd()
+				envResult, err := sandbox.RewriteEnvFiles(cwd, sessionID, credentialKeys, debug)
+				if err != nil {
+					if debug {
+						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to rewrite .env files: %v\n", err)
+					}
+				}
+
+				// Combine env-detected mappings with file-specific mappings.
+				allMappings := make([]sandbox.CredentialMapping, len(detected))
+				copy(allMappings, detected)
+				if envResult != nil {
+					allMappings = append(allMappings, envResult.FileMappings...)
+					rewrittenEnvFiles = envResult.RewrittenFiles
+				}
 
 				// Build metadata for the dashboard
-				cwd, _ := os.Getwd()
 				meta := &sandbox.SessionMetadata{
 					Pwd: cwd,
 					Cmd: cmdName,
@@ -461,31 +479,54 @@ func runCommand(cmd *cobra.Command, args []string) error {
 					}
 				}
 
-				regResult, err := sandbox.RegisterSession(sessionID, containerName, detected, injectLabels, meta, "")
+				// Register ALL mappings (env + file) with the proxy in one call.
+				regResult, err := sandbox.RegisterSession(sessionID, containerName, allMappings, injectLabels, meta, "")
 				if err != nil {
 					if debug {
 						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to register session: %v (credentials will be visible)\n", err)
 					}
-					credMappings = nil // Don't substitute if registration failed
+					credMappings = nil
+					// Clean up rewritten files since we can't register them.
+					sandbox.CleanupRewrittenFiles(rewrittenEnvFiles)
+					rewrittenEnvFiles = nil
 				} else {
-					// Add global credential mappings returned by the proxy
+					credMappings = allMappings
+
+					// Add global credential mappings returned by the proxy.
+					// Build envMappings (detected + globals) for env substitution
+					// separately from credMappings (all) which includes file mappings.
+					envMappings := make([]sandbox.CredentialMapping, len(detected))
+					copy(envMappings, detected)
 					for label, placeholder := range regResult.GlobalCredentials {
-						credMappings = append(credMappings, sandbox.CredentialMapping{
+						m := sandbox.CredentialMapping{
 							EnvVar:      label,
 							Placeholder: placeholder,
-						})
+						}
+						credMappings = append(credMappings, m)
+						envMappings = append(envMappings, m)
 					}
 
-					// Substitute credentials in the environment
-					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, credMappings)
-					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, detected, injectLabels, meta, "", debug)
+					// Substitute credentials in the environment using only
+					// env-detected + global mappings. File mappings must NOT
+					// be used here because they may have different placeholders
+					// for the same key name (e.g., .env has KEY=val1 while
+					// the env var has KEY=val2).
+					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, envMappings)
+					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, allMappings, injectLabels, meta, "", debug)
+					credSubstitutionActive = true
+					manager.SetRewrittenEnvFiles(rewrittenEnvFiles)
 
 					if debug {
-						var labels []string
+						labels := make(map[string]bool)
 						for _, m := range credMappings {
-							labels = append(labels, m.EnvVar)
+							labels[m.EnvVar] = true
 						}
-						fmt.Fprintf(os.Stderr, "[greywall:cred] protected %d credentials: %s\n", len(credMappings), strings.Join(labels, ", "))
+						var labelList []string
+						for l := range labels {
+							labelList = append(labelList, l)
+						}
+						fmt.Fprintf(os.Stderr, "[greywall:cred] protected %d credentials (%d env, %d from .env files): %s\n",
+							len(credMappings), len(detected), len(credMappings)-len(detected), strings.Join(labelList, ", "))
 					}
 				}
 			} else if debug {
@@ -493,6 +534,13 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+
+	// Warn if .env files will be masked because credential substitution is not active.
+	if !credSubstitutionActive && !learning {
+		cwd, _ := os.Getwd()
+		sandbox.WarnMaskedEnvFiles(cwd)
+	}
+
 	// Ensure cleanup on exit
 	defer func() {
 		if stopHeartbeat != nil {
@@ -501,7 +549,18 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		if credSessionID != "" && len(credMappings) > 0 {
 			_ = sandbox.DeleteSession(credSessionID, "")
 		}
+		sandbox.CleanupRewrittenFiles(rewrittenEnvFiles)
 	}()
+
+	sandboxedCommand, err := manager.WrapCommand(command)
+	if err != nil {
+		return fmt.Errorf("failed to wrap command: %w", err)
+	}
+
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall] Sandboxed command: %s\n", sandboxedCommand)
+		fmt.Fprintf(os.Stderr, "[greywall] Executing: sh -c %q\n", sandboxedCommand)
+	}
 
 	// Inject keyring secrets for active profiles (Linux only).
 	// This reads from the host keyring before sandboxing blocks D-Bus access.
