@@ -467,8 +467,6 @@ func runCommand(cmd *cobra.Command, args []string) error {
 							labels = append(labels, m.EnvVar)
 						}
 						fmt.Fprintf(os.Stderr, "[greywall:cred] protected %d credentials: %s\n", len(credMappings), strings.Join(labels, ", "))
-					} else {
-						fmt.Fprintf(os.Stderr, "[greywall] Protected %d credential(s) via proxy substitution\n", len(credMappings))
 					}
 				}
 			} else if debug {
