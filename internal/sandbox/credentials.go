@@ -197,7 +197,7 @@ func GenerateSessionID() (string, error) {
 
 // SubstituteEnv replaces credential values with placeholders in the environment.
 // If a mapping's env var is not present in the environment, it is appended
-// (this happens for global credentials injected via --cred).
+// (this happens for global credentials injected via --inject).
 // Returns the modified environment.
 func SubstituteEnv(env []string, mappings []CredentialMapping) []string {
 	// Build lookup: envVar -> placeholder
