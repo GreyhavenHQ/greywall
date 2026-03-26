@@ -13,7 +13,7 @@ func TestDetectCredentials_WellKnown(t *testing.T) {
 		"HOME=/home/test",
 	}
 
-	mappings, err := DetectCredentials(env, "test-session")
+	mappings, err := DetectCredentials(env, "test-session", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestDetectCredentials_SuffixPattern(t *testing.T) {
 		"PLAIN_VARIABLE=hello",
 	}
 
-	mappings, err := DetectCredentials(env, "test")
+	mappings, err := DetectCredentials(env, "test", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestDetectCredentials_EmptyValues(t *testing.T) {
 		"OPENAI_API_KEY=sk-real",
 	}
 
-	mappings, err := DetectCredentials(env, "test")
+	mappings, err := DetectCredentials(env, "test", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -98,13 +98,44 @@ func TestDetectCredentials_NonCredentialExcluded(t *testing.T) {
 		"STRIPE_PUBLISHABLE_KEY=pk_test_123",
 	}
 
-	mappings, err := DetectCredentials(env, "test")
+	mappings, err := DetectCredentials(env, "test", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if len(mappings) != 0 {
 		t.Fatalf("expected 0 mappings (all non-credential), got %d", len(mappings))
+	}
+}
+
+func TestDetectCredentials_ExtraVars(t *testing.T) {
+	env := []string{
+		"MY_CUSTOM_THING=secret-value",
+		"PLAIN_VARIABLE=hello",
+	}
+
+	// Without extraVars, MY_CUSTOM_THING is not detected (no matching suffix)
+	mappings, err := DetectCredentials(env, "test", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mappings) != 0 {
+		t.Fatalf("expected 0 mappings without extraVars, got %d", len(mappings))
+	}
+
+	// With extraVars, it is detected
+	mappings, err = DetectCredentials(env, "test", []string{"MY_CUSTOM_THING"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mappings) != 1 {
+		t.Fatalf("expected 1 mapping with extraVars, got %d", len(mappings))
+	}
+	if mappings[0].EnvVar != "MY_CUSTOM_THING" {
+		t.Errorf("expected MY_CUSTOM_THING, got %s", mappings[0].EnvVar)
+	}
+	if mappings[0].RealValue != "secret-value" {
+		t.Errorf("expected secret-value, got %s", mappings[0].RealValue)
 	}
 }
 

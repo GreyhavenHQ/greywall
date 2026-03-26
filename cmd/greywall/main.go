@@ -48,6 +48,7 @@ var (
 	autoProfile            bool
 	noCredentialProtection bool
 	credLabels             []string
+	protectVars            []string
 	skipVersionCheck       bool
 )
 
@@ -122,6 +123,7 @@ Configuration file format:
 	rootCmd.Flags().BoolVar(&autoProfile, "auto-profile", false, "Use saved or built-in profile without prompting")
 	rootCmd.Flags().BoolVar(&noCredentialProtection, "no-credential-protection", false, "Disable credential substitution (real credentials visible in sandbox)")
 	rootCmd.Flags().StringArrayVar(&credLabels, "cred", nil, "Inject a global credential by label (can be used multiple times, e.g. --cred ANTHROPIC_API_KEY)")
+	rootCmd.Flags().StringArrayVar(&protectVars, "protect", nil, "Protect an additional env var not in the default list (can be used multiple times)")
 	rootCmd.Flags().BoolVar(&skipVersionCheck, "skip-version-check", false, "Skip greyproxy version check (for testing)")
 	_ = rootCmd.Flags().MarkHidden("skip-version-check")
 
@@ -416,7 +418,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			credSessionID = sessionID
-			detected, err := sandbox.DetectCredentials(hardenedEnv, sessionID)
+			detected, err := sandbox.DetectCredentials(hardenedEnv, sessionID, protectVars)
 			if err != nil {
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall:cred] failed to detect credentials: %v\n", err)
