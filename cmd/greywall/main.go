@@ -49,6 +49,7 @@ var (
 	noCredentialProtection bool
 	injectLabels           []string
 	secretVars             []string
+	ignoreVars             []string
 	skipVersionCheck       bool
 )
 
@@ -126,6 +127,7 @@ Configuration file format:
 	rootCmd.Flags().BoolVar(&noCredentialProtection, "no-credential-protection", false, "Disable credential substitution (real credentials visible in sandbox)")
 	rootCmd.Flags().StringArrayVar(&injectLabels, "inject", nil, "Inject a global credential by label (can be used multiple times, e.g. --inject ANTHROPIC_API_KEY)")
 	rootCmd.Flags().StringArrayVar(&secretVars, "secret", nil, "Protect an additional env var not in the default list (can be used multiple times)")
+	rootCmd.Flags().StringArrayVar(&ignoreVars, "ignore-secret", nil, "Exclude an env var from credential detection (can be used multiple times)")
 	rootCmd.Flags().BoolVar(&skipVersionCheck, "skip-version-check", false, "Skip greyproxy version check (for testing)")
 	_ = rootCmd.Flags().MarkHidden("skip-version-check")
 
@@ -291,6 +293,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// Merge config credentials with CLI flags (config + CLI, deduplicated)
 	secretVars = mergeUnique(cfg.Credentials.Secrets, secretVars)
 	injectLabels = mergeUnique(cfg.Credentials.Inject, injectLabels)
+	ignoreVars = mergeUnique(cfg.Credentials.Ignore, ignoreVars)
 
 	// CLI flags override config
 	if proxyURL != "" {
@@ -424,7 +427,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			credSessionID = sessionID
-			detected, err := sandbox.DetectCredentials(hardenedEnv, sessionID, secretVars)
+			detected, err := sandbox.DetectCredentials(hardenedEnv, sessionID, secretVars, ignoreVars)
 			if err != nil {
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall:cred] failed to detect credentials: %v\n", err)

@@ -13,7 +13,7 @@ func TestDetectCredentials_WellKnown(t *testing.T) {
 		"HOME=/home/test",
 	}
 
-	mappings, err := DetectCredentials(env, "test-session", nil)
+	mappings, err := DetectCredentials(env, "test-session", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestDetectCredentials_SuffixPattern(t *testing.T) {
 		"PLAIN_VARIABLE=hello",
 	}
 
-	mappings, err := DetectCredentials(env, "test", nil)
+	mappings, err := DetectCredentials(env, "test", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestDetectCredentials_EmptyValues(t *testing.T) {
 		"OPENAI_API_KEY=sk-real",
 	}
 
-	mappings, err := DetectCredentials(env, "test", nil)
+	mappings, err := DetectCredentials(env, "test", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDetectCredentials_NonCredentialExcluded(t *testing.T) {
 		"STRIPE_PUBLISHABLE_KEY=pk_test_123",
 	}
 
-	mappings, err := DetectCredentials(env, "test", nil)
+	mappings, err := DetectCredentials(env, "test", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestDetectCredentials_ExtraVars(t *testing.T) {
 	}
 
 	// Without extraVars, MY_CUSTOM_THING is not detected (no matching suffix)
-	mappings, err := DetectCredentials(env, "test", nil)
+	mappings, err := DetectCredentials(env, "test", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestDetectCredentials_ExtraVars(t *testing.T) {
 	}
 
 	// With extraVars, it is detected
-	mappings, err = DetectCredentials(env, "test", []string{"MY_CUSTOM_THING"})
+	mappings, err = DetectCredentials(env, "test", []string{"MY_CUSTOM_THING"}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,6 +136,35 @@ func TestDetectCredentials_ExtraVars(t *testing.T) {
 	}
 	if mappings[0].RealValue != "secret-value" {
 		t.Errorf("expected secret-value, got %s", mappings[0].RealValue)
+	}
+}
+
+func TestDetectCredentials_IgnoreVars(t *testing.T) {
+	env := []string{
+		"ANTHROPIC_API_KEY=sk-ant-123",
+		"MY_INTERNAL_TOKEN=internal-value",
+		"OPENAI_API_KEY=sk-openai-456",
+	}
+
+	// Without ignore, all three are detected
+	mappings, err := DetectCredentials(env, "test", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mappings) != 3 {
+		t.Fatalf("expected 3 mappings without ignore, got %d", len(mappings))
+	}
+
+	// With ignore, ANTHROPIC_API_KEY and MY_INTERNAL_TOKEN are excluded
+	mappings, err = DetectCredentials(env, "test", nil, []string{"ANTHROPIC_API_KEY", "MY_INTERNAL_TOKEN"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mappings) != 1 {
+		t.Fatalf("expected 1 mapping with ignore, got %d", len(mappings))
+	}
+	if mappings[0].EnvVar != "OPENAI_API_KEY" {
+		t.Errorf("expected OPENAI_API_KEY, got %s", mappings[0].EnvVar)
 	}
 }
 

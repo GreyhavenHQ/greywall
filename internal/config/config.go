@@ -29,6 +29,7 @@ type Config struct {
 type CredentialConfig struct {
 	Secrets []string `json:"secrets,omitempty"` // Additional env vars to treat as credentials
 	Inject  []string `json:"inject,omitempty"`  // Global credential labels to inject from proxy
+	Ignore  []string `json:"ignore,omitempty"`  // Env vars to exclude from credential detection
 }
 
 // NetworkConfig defines network restrictions.
@@ -496,6 +497,7 @@ func Merge(base, override *Config) *Config {
 		Credentials: CredentialConfig{
 			Secrets: mergeStrings(base.Credentials.Secrets, override.Credentials.Secrets),
 			Inject:  mergeStrings(base.Credentials.Inject, override.Credentials.Inject),
+			Ignore:  mergeStrings(base.Credentials.Ignore, override.Credentials.Ignore),
 		},
 	}
 

@@ -128,14 +128,24 @@ type CredentialMapping struct {
 // DetectCredentials scans the environment for credential env vars.
 // extraVars is an optional list of additional env var names to treat as credentials
 // (for vars that don't match the well-known list or suffix patterns).
+// ignoreVars is an optional list of env var names to exclude from detection
+// (for vars that match patterns but should not be treated as secrets).
 // Returns mappings for all detected credentials.
-func DetectCredentials(env []string, sessionID string, extraVars []string) ([]CredentialMapping, error) {
+func DetectCredentials(env []string, sessionID string, extraVars, ignoreVars []string) ([]CredentialMapping, error) {
 	wellKnown := make(map[string]bool, len(WellKnownCredentialEnvVars)+len(extraVars))
 	for _, v := range WellKnownCredentialEnvVars {
 		wellKnown[v] = true
 	}
 	for _, v := range extraVars {
 		wellKnown[v] = true
+	}
+
+	ignored := make(map[string]bool, len(nonCredentialVars)+len(ignoreVars))
+	for k, v := range nonCredentialVars {
+		ignored[k] = v
+	}
+	for _, v := range ignoreVars {
+		ignored[v] = true
 	}
 
 	var mappings []CredentialMapping
@@ -147,7 +157,7 @@ func DetectCredentials(env []string, sessionID string, extraVars []string) ([]Cr
 		key := entry[:idx]
 		value := entry[idx+1:]
 
-		if value == "" || nonCredentialVars[key] {
+		if value == "" || ignored[key] {
 			continue
 		}
 
