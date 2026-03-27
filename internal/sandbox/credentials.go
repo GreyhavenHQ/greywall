@@ -382,11 +382,11 @@ func DeleteSession(sessionID, apiBase string) error {
 		apiBase = greyproxyAPIBase
 	}
 
-	req, err := http.NewRequest(http.MethodDelete, apiBase+"/api/sessions/"+sessionID, nil) //nolint:gosec // local API, sessionID is internally generated
+	req, err := http.NewRequest(http.MethodDelete, apiBase+"/api/sessions/"+sessionID, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // local API, sessionID is internally generated
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
