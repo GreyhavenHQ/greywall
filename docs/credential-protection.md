@@ -101,6 +101,24 @@ It does NOT apply to:
 - **Request bodies** (the placeholder is sent as-is; most APIs read keys from headers)
 - **Non-HTTP protocols** (raw TCP, WebSocket frames after upgrade)
 
+## `.env` file rewriting
+
+Many tools read credentials from `.env` files in addition to (or instead of) environment variables. Greywall rewrites these files with placeholder values so the sandboxed process never sees the real secrets. The level of support depends on the platform.
+
+### Linux (full support)
+
+Greywall uses bubblewrap's `--ro-bind` to mount rewritten `.env` files (containing placeholders) over the originals inside the sandbox namespace. This is transparent to the sandboxed process; it reads `.env` as usual and gets placeholder values. Works with all binaries regardless of how they are compiled or signed.
+
+### macOS (partial support)
+
+macOS has no equivalent to Linux's bind-mount namespaces. The `sandbox-exec` (Seatbelt) profile can allow or deny file access but cannot redirect reads to a different file.
+
+**Default behavior**: `.env` files are **denied entirely** in the Seatbelt profile. The sandboxed process gets a permission-denied error if it tries to read them. Credentials in environment variables are still substituted normally, and HTTP-layer credential substitution still protects secrets in request headers and query parameters.
+
+**Workaround**: use `--inject` so credentials only exist as environment variables (with placeholder values) inside the sandbox, rather than in `.env` files on disk.
+
+> `.env` file rewriting on macOS requires file-level interposition techniques (such as DYLD library injection) that are blocked by most notarized and hardened-runtime binaries. This includes tools like Claude Code, Cursor, and other signed applications. See [platform-support.md](platform-support.md) for details.
+
 ## Sandbox hardening
 
 Greyproxy stores the encryption key (`session.key`) and CA private key (`ca-key.pem`) on disk. These files are denied from the sandbox on both platforms:
@@ -112,6 +130,6 @@ This prevents the sandboxed process from reading the key material needed to decr
 
 ## Limitations
 
-- `.env` file rewriting is planned but not yet implemented. If your application reads credentials from `.env` or `.env.local` instead of the environment, it may get the real value directly. As a workaround, use `--inject` so the credential only exists as a placeholder in the sandbox.
+- **macOS `.env` file rewriting**: not supported for most binaries. `.env` files are denied instead. See the section above for details and workarounds.
 - Credential detection is heuristic-based. Use `--secret` for any variables the auto-detection misses.
 - Body substitution is not supported. APIs that accept credentials in the request body (rather than headers) will receive the placeholder string.
