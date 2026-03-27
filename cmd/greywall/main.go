@@ -466,7 +466,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 				// Build metadata for the dashboard
 				meta := &sandbox.SessionMetadata{
-					Pwd: cwd,
+					WorkDir: cwd,
 					Cmd: cmdName,
 					PID: strconv.Itoa(os.Getpid()),
 				}

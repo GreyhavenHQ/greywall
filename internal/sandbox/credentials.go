@@ -258,7 +258,7 @@ type sessionRequest struct {
 
 // SessionMetadata holds context about the sandboxed process for dashboard display.
 type SessionMetadata struct {
-	Pwd        string // Working directory
+	WorkDir    string // Working directory (cwd)
 	Cmd        string // Command name
 	Args       string // Command arguments
 	BinaryPath string // Absolute path to the binary
@@ -302,8 +302,8 @@ func RegisterSession(sessionID, containerName string, mappings []CredentialMappi
 	var reqMetadata map[string]string
 	if metadata != nil {
 		reqMetadata = make(map[string]string)
-		if metadata.Pwd != "" {
-			reqMetadata["pwd"] = metadata.Pwd
+		if metadata.WorkDir != "" {
+			reqMetadata["pwd"] = metadata.WorkDir
 		}
 		if metadata.Cmd != "" {
 			reqMetadata["cmd"] = metadata.Cmd
@@ -338,7 +338,7 @@ func RegisterSession(sessionID, containerName string, mappings []CredentialMappi
 	if err != nil {
 		return nil, fmt.Errorf("register session: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -361,11 +361,11 @@ func HeartbeatSession(sessionID, apiBase string) error {
 		apiBase = greyproxyAPIBase
 	}
 
-	resp, err := http.Post(apiBase+"/api/sessions/"+sessionID+"/heartbeat", "application/json", nil)
+	resp, err := http.Post(apiBase+"/api/sessions/"+sessionID+"/heartbeat", "application/json", nil) //nolint:gosec // local API, sessionID is internally generated
 	if err != nil {
 		return fmt.Errorf("heartbeat: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("session expired or not found")
@@ -382,7 +382,7 @@ func DeleteSession(sessionID, apiBase string) error {
 		apiBase = greyproxyAPIBase
 	}
 
-	req, err := http.NewRequest(http.MethodDelete, apiBase+"/api/sessions/"+sessionID, nil)
+	req, err := http.NewRequest(http.MethodDelete, apiBase+"/api/sessions/"+sessionID, nil) //nolint:gosec // local API, sessionID is internally generated
 	if err != nil {
 		return err
 	}
@@ -390,7 +390,7 @@ func DeleteSession(sessionID, apiBase string) error {
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return nil
 }
 
@@ -515,7 +515,7 @@ func RewriteEnvFiles(cwd, sessionID string, credentialKeys map[string]bool, debu
 
 		if _, err := tmpFile.Write(replaced); err != nil {
 			_ = tmpFile.Close()
-			_ = os.Remove(tmpFile.Name())
+			_ = os.Remove(tmpFile.Name()) //nolint:gosec // path is from os.CreateTemp, not user input
 			if debug {
 				fmt.Fprintf(os.Stderr, "[greywall:cred] failed to write rewritten %s: %v\n", f, err)
 			}

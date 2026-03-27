@@ -56,13 +56,14 @@ func (b *DbusBridge) Cleanup() {}
 
 // LinuxSandboxOptions is a stub for non-Linux platforms.
 type LinuxSandboxOptions struct {
-	UseLandlock   bool
-	UseSeccomp    bool
-	UseEBPF       bool
-	Monitor       bool
-	Debug         bool
-	Learning      bool
-	StraceLogPath string
+	UseLandlock       bool
+	UseSeccomp        bool
+	UseEBPF           bool
+	Monitor           bool
+	Debug             bool
+	Learning          bool
+	StraceLogPath     string
+	RewrittenEnvFiles map[string]string
 }
 
 // NewProxyBridge returns an error on non-Linux platforms.
