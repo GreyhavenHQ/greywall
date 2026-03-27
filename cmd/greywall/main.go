@@ -864,7 +864,9 @@ profiles, first save a copy with --learning or copy the output of "profiles show
 			}
 
 			for {
-				editorArgs := append(editorParts[1:], profilePath)
+				editorArgs := make([]string, len(editorParts)-1, len(editorParts))
+				copy(editorArgs, editorParts[1:])
+				editorArgs = append(editorArgs, profilePath)
 				editorCmd := exec.Command(editorParts[0], editorArgs...) //nolint:gosec // editor from user env
 				editorCmd.Stdin = os.Stdin
 				editorCmd.Stdout = os.Stdout
@@ -902,7 +904,7 @@ profiles, first save a copy with --learning or copy the output of "profiles show
 					}
 					switch strings.ToLower(strings.TrimSpace(choice)) {
 					case "d", "discard":
-						if writeErr := os.WriteFile(profilePath, originalData, 0600); writeErr != nil {
+						if writeErr := os.WriteFile(profilePath, originalData, 0o600); writeErr != nil {
 							return fmt.Errorf("failed to restore original profile: %w", writeErr)
 						}
 						fmt.Println("Changes discarded.")
