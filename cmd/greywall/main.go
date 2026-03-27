@@ -758,7 +758,8 @@ Profiles are created by running greywall with --learning and are stored in:
 
 Examples:
   greywall profiles list            # List all profiles
-  greywall profiles show opencode   # Show the content of a profile`,
+  greywall profiles show opencode   # Show the content of a profile
+  greywall profiles edit opencode   # Edit a saved profile in $EDITOR`,
 	}
 
 	listCmd := &cobra.Command{
@@ -795,6 +796,7 @@ Examples:
 			}
 
 			fmt.Println("Show a profile:    greywall profiles show <name>")
+			fmt.Println("Edit a profile:    greywall profiles edit <name>")
 			fmt.Println("Use a profile:     greywall --profile <name> -- <command>")
 			fmt.Println("Combine profiles:  greywall --profile claude,python -- claude")
 			return nil
@@ -822,7 +824,102 @@ Examples:
 		},
 	}
 
-	cmd.AddCommand(listCmd, showCmd)
+	editCmd := &cobra.Command{
+		Use:   "edit <name>",
+		Short: "Edit a saved profile in your editor",
+		Long: `Open a saved profile in $EDITOR for editing. After the editor closes,
+the profile is validated. If validation fails, you can re-edit or discard changes.
+
+Only saved profiles (created via --learning) can be edited. To edit built-in
+profiles, first save a copy with --learning or copy the output of "profiles show".`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			profilePath := sandbox.LearnedTemplatePath(name)
+			if _, err := os.Stat(profilePath); err != nil {
+				if os.IsNotExist(err) {
+					return fmt.Errorf("profile %q not found (only saved profiles can be edited)\nRun: greywall profiles list", name)
+				}
+				return fmt.Errorf("failed to access profile %q: %w", name, err)
+			}
+
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = os.Getenv("VISUAL")
+			}
+			if editor == "" {
+				editor = "vi"
+			}
+
+			// Split editor to support values like "code --wait" or "emacs -nw"
+			editorParts := strings.Fields(editor)
+			if len(editorParts) == 0 {
+				editorParts = []string{"vi"}
+			}
+
+			// Save original content for change detection and rollback
+			originalData, err := os.ReadFile(profilePath) //nolint:gosec // user-specified profile path
+			if err != nil {
+				return fmt.Errorf("failed to read profile: %w", err)
+			}
+
+			for {
+				editorArgs := append(editorParts[1:], profilePath)
+				editorCmd := exec.Command(editorParts[0], editorArgs...) //nolint:gosec // editor from user env
+				editorCmd.Stdin = os.Stdin
+				editorCmd.Stdout = os.Stdout
+				editorCmd.Stderr = os.Stderr
+				if err := editorCmd.Run(); err != nil {
+					return fmt.Errorf("editor exited with error: %w", err)
+				}
+
+				// Check if file was changed
+				newData, err := os.ReadFile(profilePath) //nolint:gosec // same path
+				if err != nil {
+					return fmt.Errorf("failed to read profile after edit: %w", err)
+				}
+				if string(newData) == string(originalData) {
+					fmt.Println("No changes made.")
+					return nil
+				}
+
+				// Validate the edited profile
+				cfg, err := config.Load(profilePath)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Validation error: %v\n\n", err)
+				} else if cfg == nil {
+					// config.Load returns (nil, nil) for empty files
+					fmt.Fprintln(os.Stderr, "Validation error: profile is empty")
+					err = fmt.Errorf("empty profile")
+				}
+
+				if err != nil {
+					fmt.Fprint(os.Stderr, "(r)e-edit, (d)iscard changes? [r/d]: ")
+					var choice string
+					if _, scanErr := fmt.Scanln(&choice); scanErr != nil {
+						// Non-interactive or stdin closed — discard to be safe
+						choice = "d"
+					}
+					switch strings.ToLower(strings.TrimSpace(choice)) {
+					case "d", "discard":
+						if writeErr := os.WriteFile(profilePath, originalData, 0600); writeErr != nil {
+							return fmt.Errorf("failed to restore original profile: %w", writeErr)
+						}
+						fmt.Println("Changes discarded.")
+						return nil
+					default:
+						// Re-edit
+						continue
+					}
+				}
+
+				fmt.Printf("Profile %q updated.\n", name)
+				return nil
+			}
+		},
+	}
+
+	cmd.AddCommand(listCmd, showCmd, editCmd)
 	return cmd
 }
 
