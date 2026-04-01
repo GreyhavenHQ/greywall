@@ -1096,7 +1096,7 @@ profiles, first save a copy with --learning or copy the output of "profiles show
 					}
 					switch strings.ToLower(strings.TrimSpace(choice)) {
 					case "d", "discard":
-						if writeErr := os.WriteFile(profilePath, originalData, 0o600); writeErr != nil {
+						if writeErr := os.WriteFile(profilePath, originalData, 0o600); writeErr != nil { //nolint:gosec // user-specified profile path - intentional
 							return fmt.Errorf("failed to restore original profile: %w", writeErr)
 						}
 						fmt.Println("Changes discarded.")

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run gofumpt and golangci-lint before every commit.
+# Install with: make install-hooks
+
+set -euo pipefail
+
+export PATH="$PATH:$(go env GOPATH)/bin"
+
+echo "[greywall] Running pre-commit checks..."
+
+if ! command -v gofumpt &>/dev/null; then
+  echo "[greywall] gofumpt not found — run 'make setup' to install linting tools"
+  exit 1
+fi
+
+if ! command -v golangci-lint &>/dev/null; then
+  echo "[greywall] golangci-lint not found — run 'make setup' to install linting tools"
+  exit 1
+fi
+
+echo "[greywall] Checking formatting..."
+UNFORMATTED=$(gofumpt -l .)
+if [ -n "$UNFORMATTED" ]; then
+  echo "[greywall] The following files need formatting (run 'make fmt'):"
+  echo "$UNFORMATTED"
+  exit 1
+fi
+
+echo "[greywall] Running linter..."
+golangci-lint run --allow-parallel-runners
+
+echo "[greywall] All checks passed."

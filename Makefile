@@ -8,7 +8,7 @@ BINARY_UNIX=$(BINARY_NAME)_unix
 TUN2SOCKS_VERSION=v2.5.2
 TUN2SOCKS_BIN_DIR=internal/sandbox/bin
 
-.PHONY: all build build-ci build-linux test test-ci clean deps install-lint-tools setup setup-ci run fmt lint release release-minor release-beta download-tun2socks help
+.PHONY: all build build-ci build-linux test test-ci clean deps install-lint-tools install-hooks setup setup-ci run fmt fmt-check lint release release-minor release-beta download-tun2socks help
 
 all: build
 
@@ -77,7 +77,13 @@ install-lint-tools:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	@echo "Linting tools installed"
 
-setup: deps install-lint-tools
+install-hooks:
+	@echo "Installing git hooks..."
+	cp scripts/pre-commit .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
+	@echo "Git hooks installed"
+
+setup: deps install-lint-tools install-hooks
 	@echo "Development environment ready"
 
 setup-ci: deps install-lint-tools
@@ -89,6 +95,16 @@ run: build
 fmt:
 	@echo "Formatting code..."
 	gofumpt -w .
+
+fmt-check:
+	@echo "Checking formatting..."
+	@UNFORMATTED=$$(gofumpt -l .); \
+	if [ -n "$$UNFORMATTED" ]; then \
+		echo "The following files need formatting (run 'make fmt'):"; \
+		echo "$$UNFORMATTED"; \
+		exit 1; \
+	fi
+	@echo "All files are formatted."
 
 lint:
 	@echo "Linting code..."
@@ -119,10 +135,12 @@ help:
 	@echo "  clean              - Clean build artifacts"
 	@echo "  deps               - Download dependencies"
 	@echo "  install-lint-tools - Install linting tools"
-	@echo "  setup              - Setup development environment"
+	@echo "  install-hooks      - Install git pre-commit hook"
+	@echo "  setup              - Setup development environment (includes hooks)"
 	@echo "  setup-ci           - Setup CI environment"
 	@echo "  run                - Build and run"
 	@echo "  fmt                - Format code"
+	@echo "  fmt-check          - Check formatting (non-destructive, for CI)"
 	@echo "  lint               - Lint code"
 	@echo "  release            - Create patch release (v0.0.X)"
 	@echo "  release-minor      - Create minor release (v0.X.0)"
