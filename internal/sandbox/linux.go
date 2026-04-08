@@ -1342,9 +1342,11 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	// Set CA cert env vars so sandboxed apps trust the greyproxy MITM CA certificate.
 	// NODE_EXTRA_CA_CERTS: Node.js uses its own compiled-in CA bundle and ignores the OS keychain.
 	// SSL_CERT_FILE: Used by OpenSSL-based tools (Python, Ruby, curl, wget, Go, etc.).
+	// REQUESTS_CA_BUNDLE: Used by Python requests/httpx/aider and other Python HTTP clients.
 	if caCertPath != "" {
 		fmt.Fprintf(&innerScript, "export NODE_EXTRA_CA_CERTS=%s\n", ShellQuoteSingle(caCertPath))
 		fmt.Fprintf(&innerScript, "export SSL_CERT_FILE=%s\n", ShellQuoteSingle(caCertPath))
+		fmt.Fprintf(&innerScript, "export REQUESTS_CA_BUNDLE=%s\n", ShellQuoteSingle(caCertPath))
 	}
 
 	if proxyBridge != nil && tun2socksPath != "" && features.CanUseTransparentProxy() {

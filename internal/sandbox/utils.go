@@ -101,9 +101,11 @@ func GenerateProxyEnvVars(proxyURL, httpProxyURL string) []string {
 	// Set CA cert env vars so sandboxed apps trust the greyproxy MITM CA certificate.
 	// NODE_EXTRA_CA_CERTS: Node.js uses its own compiled-in CA bundle and ignores the OS keychain.
 	// SSL_CERT_FILE: Used by OpenSSL-based tools (Python, Ruby, curl, wget, Go, etc.).
+	// REQUESTS_CA_BUNDLE: Used by Python requests/httpx/aider and other Python HTTP clients.
 	if certPath := greyproxyCACertPath(); certPath != "" {
 		envVars = append(envVars, "NODE_EXTRA_CA_CERTS="+certPath)
 		envVars = append(envVars, "SSL_CERT_FILE="+certPath)
+		envVars = append(envVars, "REQUESTS_CA_BUNDLE="+certPath)
 	}
 
 	return envVars
