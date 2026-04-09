@@ -249,6 +249,7 @@ SSH host patterns support wildcards anywhere:
 | Field | Description |
 |-------|-------------|
 | `allowPty` | Allow pseudo-terminal (PTY) allocation in the sandbox (for MacOS) |
+| `allowAudio` | Expose PulseAudio and PipeWire sockets inside the sandbox so commands can produce audio output (Linux only). Note: these sockets also allow microphone capture and, via PipeWire, camera/screen access. Disabled by default. |
 
 ## Importing from Claude Code
 

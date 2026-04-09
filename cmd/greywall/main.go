@@ -102,7 +102,8 @@ Configuration file format:
   },
   "command": {
     "deny": ["git push", "npm publish"]
-  }
+  },
+  "allowAudio": true
 }`,
 		RunE:          runCommand,
 		SilenceUsage:  true,

@@ -439,6 +439,8 @@ func Merge(base, override *Config) *Config {
 	result := &Config{
 		// AllowPty: true if either config enables it
 		AllowPty: base.AllowPty || override.AllowPty,
+		// AllowAudio: true if either config enables it
+		AllowAudio: base.AllowAudio || override.AllowAudio,
 
 		Network: NetworkConfig{
 			// ProxyURL/HTTPProxyURL/DnsAddr: override wins if non-empty
