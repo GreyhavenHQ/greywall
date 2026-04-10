@@ -39,6 +39,14 @@ func init() {
 				)
 			}
 			return &config.Config{
+				Network: config.NetworkConfig{
+					Rules: []config.NetworkRule{
+						{Destination: "api.anthropic.com", Port: "443", Action: "allow"},
+						{Destination: "**.anthropic.com", Port: "443", Action: "allow"},
+						{Destination: "github.com", Port: "443", Action: "allow"},
+						{Destination: "*.githubusercontent.com", Port: "443", Action: "allow"},
+					},
+				},
 				Filesystem: config.FilesystemConfig{
 					AllowRead:  allowRead,
 					AllowWrite: allowWrite,

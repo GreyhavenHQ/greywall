@@ -10,6 +10,12 @@ func init() {
 		Names: []string{"amp"},
 		Overlay: func() *config.Config {
 			return &config.Config{
+				Network: config.NetworkConfig{
+					Rules: []config.NetworkRule{
+						{Destination: "api.anthropic.com", Port: "443", Action: "allow"},
+						{Destination: "api.openai.com", Port: "443", Action: "allow"},
+					},
+				},
 				Filesystem: config.FilesystemConfig{
 					AllowRead:  []string{"~/.amp", "~/.config/amp", "~/.cache/amp", "~/.local/share/amp", "~/.local/state/amp", "~/.claude"},
 					AllowWrite: []string{"~/.amp", "~/.config/amp", "~/.cache/amp", "~/.local/share/amp", "~/.local/state/amp"},

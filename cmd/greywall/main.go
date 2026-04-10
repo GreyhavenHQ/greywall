@@ -51,6 +51,8 @@ var (
 	secretVars             []string
 	ignoreVars             []string
 	skipVersionCheck       bool
+	allowDests             []string
+	blankProfile           bool
 )
 
 func main() {
@@ -131,6 +133,8 @@ Configuration file format:
 	rootCmd.Flags().StringArrayVar(&ignoreVars, "ignore-secret", nil, "Exclude an env var from credential detection (can be used multiple times)")
 	rootCmd.Flags().BoolVar(&skipVersionCheck, "skip-version-check", false, "Skip greyproxy version check (for testing)")
 	_ = rootCmd.Flags().MarkHidden("skip-version-check")
+	rootCmd.Flags().StringArrayVar(&allowDests, "allow", nil, "Allow a network destination for this session (e.g. --allow api.example.com:443)")
+	rootCmd.Flags().BoolVar(&blankProfile, "blank", false, "With --learning, skip default profile network rules (start from scratch)")
 
 	// Hidden aliases for backwards compatibility
 	rootCmd.Flags().StringVar(&profileName, "template", "", "Alias for --profile (deprecated)")
@@ -232,8 +236,9 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// Extract command name for profile lookup
 	cmdName := extractCommandName(args, cmdString)
 
-	// Load profiles (when NOT in learning mode)
-	if !learning {
+	// Load profiles. In learning mode with --blank, skip profile loading entirely.
+	// In learning mode without --blank, load profiles for network rules only.
+	if !(learning && blankProfile) {
 		if profileName != "" {
 			// Explicit --profile flag: resolve each comma-separated name
 			names := strings.Split(profileName, ",")
@@ -406,6 +411,44 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build session network rules from profile config + --allow CLI flags.
+	var sessionNetworkRules []sandbox.NetworkRuleInput
+	for _, r := range cfg.Network.Rules {
+		port := r.Port
+		if port == "" {
+			port = "*"
+		}
+		action := r.Action
+		if action == "" {
+			action = "allow"
+		}
+		sessionNetworkRules = append(sessionNetworkRules, sandbox.NetworkRuleInput{
+			DestinationPattern: r.Destination,
+			PortPattern:        port,
+			Action:             action,
+			Notes:              r.Notes,
+		})
+	}
+	for _, dest := range allowDests {
+		// Parse "host:port" or just "host"
+		host, port := dest, "*"
+		if idx := strings.LastIndex(dest, ":"); idx > 0 {
+			host = dest[:idx]
+			port = dest[idx+1:]
+		}
+		sessionNetworkRules = append(sessionNetworkRules, sandbox.NetworkRuleInput{
+			DestinationPattern: host,
+			PortPattern:        port,
+			Action:             "allow",
+			Notes:              "CLI --allow flag",
+		})
+	}
+
+	sessionOpts := &sandbox.RegisterSessionOptions{
+		NetworkRules: sessionNetworkRules,
+		AllowAll:     learning,
+	}
+
 	// Credential substitution: detect credentials, rewrite .env files, register
 	// with greyproxy, and substitute env vars. This must happen before WrapCommand
 	// so that rewritten .env files are available for bind-mounting into the sandbox.
@@ -481,7 +524,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 				}
 
 				// Register ALL mappings (env + file) with the proxy in one call.
-				regResult, err := sandbox.RegisterSession(sessionID, containerName, allMappings, injectLabels, meta, "")
+				regResult, err := sandbox.RegisterSession(sessionID, containerName, allMappings, injectLabels, meta, "", sessionOpts)
 				if err != nil {
 					if debug {
 						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to register session: %v (credentials will be visible)\n", err)
@@ -513,7 +556,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 					// for the same key name (e.g., .env has KEY=val1 while
 					// the env var has KEY=val2).
 					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, envMappings)
-					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, allMappings, injectLabels, meta, "", debug)
+					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, allMappings, injectLabels, meta, "", sessionOpts, debug)
 					credSubstitutionActive = true
 					manager.SetRewrittenEnvFiles(rewrittenEnvFiles)
 
@@ -536,6 +579,49 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// If we have network rules or allow_all but didn't register a session yet
+	// (e.g., learning mode, or no credentials detected), register a session now.
+	if credSessionID == "" && (len(sessionNetworkRules) > 0 || learning) {
+		sessionID, err := sandbox.GenerateSessionID()
+		if err == nil {
+			credSessionID = sessionID
+			containerName := cmdName
+			if containerName == "" {
+				containerName = "sandbox"
+			}
+			cwd, _ := os.Getwd()
+			meta := &sandbox.SessionMetadata{
+				WorkDir: cwd,
+				Cmd:     cmdName,
+				PID:     strconv.Itoa(os.Getpid()),
+			}
+
+			regResult, err := sandbox.RegisterSession(sessionID, containerName, nil, nil, meta, "", sessionOpts)
+			if err != nil {
+				if debug {
+					fmt.Fprintf(os.Stderr, "[greywall] failed to register network rules session: %v\n", err)
+				}
+			} else {
+				if regResult.RulesCreated > 0 {
+					fmt.Fprintf(os.Stderr, "[greywall] Network rules applied: %d rules from profile\n", regResult.RulesCreated)
+				}
+				if learning {
+					fmt.Fprintf(os.Stderr, "[greywall] Learning mode: all network traffic allowed for this session\n")
+				}
+				stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, nil, nil, meta, "", sessionOpts, debug)
+			}
+		}
+	} else if credSubstitutionActive && len(sessionNetworkRules) > 0 {
+		// Session was already registered with credentials; log rule count.
+		ruleCount := 0
+		for range sessionNetworkRules {
+			ruleCount++
+		}
+		if ruleCount > 0 {
+			fmt.Fprintf(os.Stderr, "[greywall] Network rules applied: %d rules from profile\n", ruleCount)
+		}
+	}
+
 	// Warn if .env files will be masked because credential substitution is not active.
 	if !credSubstitutionActive && !learning {
 		cwd, _ := os.Getwd()
@@ -547,7 +633,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		if stopHeartbeat != nil {
 			stopHeartbeat()
 		}
-		if credSessionID != "" && len(credMappings) > 0 {
+		if credSessionID != "" {
 			_ = sandbox.DeleteSession(credSessionID, "")
 		}
 		sandbox.CleanupRewrittenFiles(rewrittenEnvFiles)

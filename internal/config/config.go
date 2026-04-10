@@ -33,16 +33,26 @@ type CredentialConfig struct {
 	Ignore  []string `json:"ignore,omitempty"`  // Env vars to exclude from credential detection
 }
 
+// NetworkRule defines a network allow/deny rule sent to greyproxy as part of session creation.
+// These rules are scoped to the session lifetime and auto-deleted when the session ends.
+type NetworkRule struct {
+	Destination string `json:"destination"`          // Domain/IP pattern (e.g. "api.openai.com", "**.openai.com", "192.168.0.0/24")
+	Port        string `json:"port,omitempty"`       // Port pattern (default "*"); supports exact, ranges ("8000-9000"), comma-separated
+	Action      string `json:"action,omitempty"`     // "allow" (default) or "deny"
+	Notes       string `json:"notes,omitempty"`      // Optional documentation
+}
+
 // NetworkConfig defines network restrictions.
 type NetworkConfig struct {
-	ProxyURL            string   `json:"proxyUrl,omitempty"`     // External SOCKS5 proxy (e.g. socks5://host:1080)
-	HTTPProxyURL        string   `json:"httpProxyUrl,omitempty"` // HTTP CONNECT proxy (e.g. http://host:43051)
-	DnsAddr             string   `json:"dnsAddr,omitempty"`      // DNS server address on host (e.g. localhost:3153)
-	AllowUnixSockets    []string `json:"allowUnixSockets,omitempty"`
-	AllowAllUnixSockets bool     `json:"allowAllUnixSockets,omitempty"`
-	AllowLocalBinding   bool     `json:"allowLocalBinding,omitempty"`
-	AllowLocalOutbound  *bool    `json:"allowLocalOutbound,omitempty"` // If nil, defaults to AllowLocalBinding value
-	ForwardPorts        []int    `json:"forwardPorts,omitempty"`       // Host localhost ports to forward into sandbox
+	ProxyURL            string        `json:"proxyUrl,omitempty"`     // External SOCKS5 proxy (e.g. socks5://host:1080)
+	HTTPProxyURL        string        `json:"httpProxyUrl,omitempty"` // HTTP CONNECT proxy (e.g. http://host:43051)
+	DnsAddr             string        `json:"dnsAddr,omitempty"`      // DNS server address on host (e.g. localhost:3153)
+	AllowUnixSockets    []string      `json:"allowUnixSockets,omitempty"`
+	AllowAllUnixSockets bool          `json:"allowAllUnixSockets,omitempty"`
+	AllowLocalBinding   bool          `json:"allowLocalBinding,omitempty"`
+	AllowLocalOutbound  *bool         `json:"allowLocalOutbound,omitempty"` // If nil, defaults to AllowLocalBinding value
+	ForwardPorts        []int         `json:"forwardPorts,omitempty"`       // Host localhost ports to forward into sandbox
+	Rules               []NetworkRule `json:"rules,omitempty"`              // Network rules sent to greyproxy per session
 }
 
 // FilesystemConfig defines filesystem restrictions.
@@ -460,6 +470,9 @@ func Merge(base, override *Config) *Config {
 
 			// Append slices
 			ForwardPorts: mergeIntSlice(base.Network.ForwardPorts, override.Network.ForwardPorts),
+
+			// Merge network rules (append, deduplicate by destination+port+action)
+			Rules: mergeNetworkRules(base.Network.Rules, override.Network.Rules),
 		},
 
 		Filesystem: FilesystemConfig{
@@ -575,4 +588,34 @@ func mergeString(base, override string) string {
 		return override
 	}
 	return base
+}
+
+// mergeNetworkRules appends two network rule slices, deduplicating by destination+port+action.
+func mergeNetworkRules(base, override []NetworkRule) []NetworkRule {
+	if len(base) == 0 {
+		return override
+	}
+	if len(override) == 0 {
+		return base
+	}
+
+	type ruleKey struct{ dest, port, action string }
+	seen := make(map[ruleKey]bool, len(base))
+	result := make([]NetworkRule, 0, len(base)+len(override))
+
+	for _, r := range base {
+		k := ruleKey{r.Destination, r.Port, r.Action}
+		if !seen[k] {
+			seen[k] = true
+			result = append(result, r)
+		}
+	}
+	for _, r := range override {
+		k := ruleKey{r.Destination, r.Port, r.Action}
+		if !seen[k] {
+			seen[k] = true
+			result = append(result, r)
+		}
+	}
+	return result
 }

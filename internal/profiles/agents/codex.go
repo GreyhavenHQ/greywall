@@ -21,6 +21,12 @@ func init() {
 				)
 			}
 			return &config.Config{
+				Network: config.NetworkConfig{
+					Rules: []config.NetworkRule{
+						{Destination: "api.openai.com", Port: "443", Action: "allow"},
+						{Destination: "**.openai.com", Port: "443", Action: "allow"},
+					},
+				},
 				Filesystem: config.FilesystemConfig{
 					AllowRead:  allowRead,
 					AllowWrite: []string{"~/.codex", "~/.cache/codex"},

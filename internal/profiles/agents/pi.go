@@ -16,6 +16,12 @@ func init() {
 				allowRead = append(allowRead, "~/Library")
 			}
 			return &config.Config{
+				Network: config.NetworkConfig{
+					Rules: []config.NetworkRule{
+						{Destination: "api.openai.com", Port: "443", Action: "allow"},
+						{Destination: "api.anthropic.com", Port: "443", Action: "allow"},
+					},
+				},
 				Filesystem: config.FilesystemConfig{
 					AllowRead:  allowRead,
 					AllowWrite: []string{"~/.pi", "~/.config/pi", "~/.cache/pi"},

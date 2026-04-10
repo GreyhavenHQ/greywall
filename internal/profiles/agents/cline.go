@@ -19,6 +19,12 @@ func init() {
 				allowWrite = append(allowWrite, vsCodeCline)
 			}
 			return &config.Config{
+				Network: config.NetworkConfig{
+					Rules: []config.NetworkRule{
+						{Destination: "api.anthropic.com", Port: "443", Action: "allow"},
+						{Destination: "api.openai.com", Port: "443", Action: "allow"},
+					},
+				},
 				Filesystem: config.FilesystemConfig{
 					AllowRead:  allowRead,
 					AllowWrite: allowWrite,
