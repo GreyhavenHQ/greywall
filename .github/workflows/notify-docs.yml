@@ -1,0 +1,20 @@
+name: Notify docs repo
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.DOCS_SYNC_TOKEN }}
+          repository: GreyhavenHQ/docs
+          event-type: sync-docs
+          client-payload: |
+            {
+              "product": "greywall",
+              "ref": "${{ github.event.release.tag_name }}"
+            }
