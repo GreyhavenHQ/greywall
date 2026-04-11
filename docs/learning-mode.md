@@ -1,10 +1,15 @@
+---
+id: learning-mode
+title: Learning Mode
+---
+
 # Learning Mode
 
 Greywall uses a deny-by-default filesystem model: reads and writes are blocked unless explicitly allowed. Rather than manually figuring out which paths a command needs, learning mode traces the command's actual filesystem access and generates a config template automatically.
 
 ## How it works
 
-1. **Run with `--learning`** — greywall relaxes the filesystem sandbox and uses `strace` to trace all file operations (`openat`, `creat`, `mkdir`, etc.).
+1. **Run with `--learning`**: greywall relaxes the filesystem sandbox and traces every file operation. On Linux it uses `strace` to follow syscalls (`openat`, `creat`, `mkdir`, and so on). On macOS it uses `eslogger`, the Endpoint Security framework's command-line client, to stream `open`, `create`, `write`, `unlink`, `truncate`, `rename`, `link`, and `fork` events for the sandboxed process tree.
 2. **Use the command normally** — interact with it as you would outside the sandbox. The trace captures every file read and write.
 3. **Template generated on exit** — greywall analyzes the trace, collapses paths into minimal directory sets, filters out system defaults and sensitive files, and saves a JSONC config template.
 4. **Next run auto-loads the template** — when you run the same command again (without `--learning`), greywall automatically loads the learned template.
@@ -16,9 +21,9 @@ Greywall uses a deny-by-default filesystem model: reads and writes are blocked u
 greywall --learning -- opencode
 
 # Step 2: Review what was generated
-greywall templates show opencode
+greywall profiles show opencode
 
-# Step 3: Run normally — template auto-loads
+# Step 3: Run normally — the profile auto-loads
 greywall -- opencode
 ```
 
@@ -30,13 +35,13 @@ greywall --learning -- <command>
 
 This runs the command inside the sandbox with:
 
-- **Relaxed filesystem** — reads and writes are allowed so strace can observe the full access pattern.
-- **strace tracing** — all filesystem-related syscalls are logged.
-- **Network still sandboxed** — network isolation remains in effect.
+- **Relaxed filesystem**: reads and writes are allowed so the tracer can observe the full access pattern.
+- **Filesystem tracing**: `strace` on Linux, `eslogger` on macOS. On macOS the tracer itself runs under `sudo` because the Endpoint Security framework requires it; the sandboxed command runs as your normal user.
+- **Network still sandboxed**: network isolation remains in effect.
 
 When the command exits, greywall:
 
-1. Parses the strace log for file access patterns.
+1. Parses the trace log for file access patterns.
 2. Filters out system paths (already allowed by default), the current working directory (auto-included), and sensitive paths (SSH keys, `.env` files, etc.).
 3. Collapses paths into minimal directory sets using application directory detection (e.g., multiple files under `~/.cache/opencode/` become a single `~/.cache/opencode` entry).
 4. Generates a JSONC template with `allowRead`, `allowWrite`, `denyWrite`, and `denyRead` sections.
@@ -44,46 +49,43 @@ When the command exits, greywall:
 
 **Security note:** The sandbox filesystem is relaxed during learning. Do not use `--learning` with untrusted code.
 
-## Managing templates
+## Managing profiles
 
-### List all learned templates
-
-```bash
-greywall templates list
-```
-
-Output:
-
-```
-Learned templates (~/.config/greywall/learned):
-
-  opencode
-  npm
-  cargo
-
-Show a template: greywall templates show <name>
-Use a template:  greywall --template <name> -- <command>
-```
-
-### Show a template
+### List all profiles
 
 ```bash
-greywall templates show opencode
+greywall profiles list
 ```
 
-This prints the full JSONC content of the template, including the generated comments.
+This lists both built-in profiles (shipped with greywall) and any learned profiles under `~/.config/greywall/learned`.
 
-### Use a specific template
+### Show a profile
 
 ```bash
-# Auto-load: greywall looks for a template matching the command name
+greywall profiles show opencode
+```
+
+This prints the full JSONC content of the profile, including the generated comments.
+
+### Edit a profile
+
+```bash
+greywall profiles edit opencode
+```
+
+Opens the profile in `$EDITOR` for direct modification.
+
+### Use a specific profile
+
+```bash
+# Auto-load: greywall looks for a profile matching the command name
 greywall -- opencode
 
-# Explicit: use a specific template regardless of command name
-greywall --template opencode -- ./my-custom-editor
+# Explicit: use a specific profile regardless of command name
+greywall --profile opencode -- ./my-custom-editor
 ```
 
-The `--template` flag takes priority over auto-detection. If the specified template doesn't exist, greywall exits with an error.
+The `--profile` flag takes priority over auto-detection. If the specified profile doesn't exist, greywall exits with an error.
 
 ## Template format
 
@@ -136,11 +138,11 @@ Key features of generated templates:
 # 1. Learn what the tool needs
 greywall --learning -- opencode
 
-# 2. Review the generated template
-greywall templates show opencode
+# 2. Review the generated profile
+greywall profiles show opencode
 
-# 3. Edit if needed (the file path is shown by greywall)
-# e.g., remove paths you don't want to allow
+# 3. Edit if needed
+greywall profiles edit opencode
 
 # 4. Run normally from now on
 greywall -- opencode
@@ -148,24 +150,24 @@ greywall -- opencode
 
 ### Re-learning after changes
 
-Running `--learning` again overwrites the existing template for that command:
+Running `--learning` again overwrites the existing profile for that command:
 
 ```bash
-# Update the template after installing new plugins
+# Update the profile after installing new plugins
 greywall --learning -- opencode
 ```
 
-### Using templates across commands
+### Using profiles across commands
 
-If multiple commands need the same permissions, use `--template`:
+If multiple commands need the same permissions, use `--profile`:
 
 ```bash
 # Learn from one command
 greywall --learning -- code
 
 # Apply to similar commands
-greywall --template code -- cursor
-greywall --template code -- windsurf
+greywall --profile code -- cursor
+greywall --profile code -- windsurf
 ```
 
 ## Path collapsing
@@ -178,12 +180,16 @@ Learning mode intelligently collapses file paths to avoid overly verbose templat
 
 ## Troubleshooting
 
-### "strace: attach: ptrace: Operation not permitted"
+### "strace: attach: ptrace: Operation not permitted" (Linux)
 
-Learning mode requires `ptrace` support. This may fail in:
+Learning mode on Linux requires `ptrace` support. This may fail in:
 
 - Docker containers without `--cap-add=SYS_PTRACE`
 - Environments with restrictive `kernel.yama.ptrace_scope` settings
+
+### "sudo: a password is required" (macOS)
+
+`eslogger` talks to the Endpoint Security framework and needs root, so greywall runs it through `sudo` at the start of learning mode. If sudo prompts for a password and you dismiss it, learning mode aborts. Run a `sudo` command beforehand to cache credentials, or configure a passwordless `sudo` entry for `/usr/bin/eslogger` if you use learning mode often.
 
 ### Template is too broad
 
@@ -200,7 +206,15 @@ Review the generated template and remove paths you don't want to allow. The temp
 
 ### Learning mode hangs after command exits
 
-This can happen if the traced command spawns long-lived child processes (LSP servers, file watchers). Greywall includes a monitor that detects when the main command exits and terminates strace, but in rare cases you may need to press Ctrl+C.
+This can happen if the traced command spawns long-lived child processes (LSP servers, file watchers). Greywall includes a monitor that detects when the main command exits and terminates the tracer, but in rare cases you may need to press Ctrl+C.
+
+## A word of caution
+
+Learning mode is driven by heuristics. It watches what a command happens to touch during one session and extrapolates a profile from that. Paths get collapsed into parent directories when they look application-specific, system defaults are filtered out, and sensitive locations (SSH keys, `.env`, and so on) are deliberately excluded even if the traced command reached for them. These rules cover most real workflows, but they are rules of thumb, not guarantees, and the profile they generate is a starting point rather than a finished contract.
+
+When you run the same command later without `--learning`, the sandbox enforces exactly what the learned profile allows. If the command uses a path the profile does not cover, it will not see a clean "permission denied" and move on. Many tools assume unrestricted filesystem access and fail in surprising ways when they hit an unexpected block: hangs while waiting for a lockfile that is silently unwritable, crashes on missing cache directories, retries that never converge, or plugins that simply do not load. If something feels off after a learning session, re-run with `-m` to see what is being blocked, then widen the profile.
+
+If you build a profile that works well for a tool other people are likely to use, please contribute it back. Open a pull request against the [greywall repository](https://github.com/GreyhavenHQ/greywall) to add or refine a default profile so everyone benefits.
 
 ## See also
 

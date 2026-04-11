@@ -1,23 +1,31 @@
+---
+id: templates
+title: Config Templates
+---
+
 # Config Templates
 
 Greywall includes built-in config templates for common use cases. Templates are embedded in the binary, so you can use them directly without copying files.
 
 ## Using templates
 
-Use the `-t` / `--template` flag to apply a template:
+Apply a template with the `--profile` flag. (Templates and profiles are the same thing in greywall; the older `-t/--template` flag is still accepted as a hidden alias but new scripts should use `--profile`.)
 
 ```bash
 # Use a built-in template
-greywall -t npm-install npm install
+greywall --profile npm-install -- npm install
 
-# Wraps Claude Code
-greywall -t code -- claude
+# Wrap Claude Code with its built-in profile
+greywall --profile code -- claude
 
-# List available templates
-greywall --list-templates
+# Combine multiple profiles (agent + toolchain)
+greywall --profile claude,python -- claude
+
+# List all available and saved profiles
+greywall profiles list
 ```
 
-You can also copy and customize templates from [`internal/templates/`](/internal/templates/).
+You can also copy and customize templates from [`internal/templates/`](https://github.com/GreyhavenHQ/greywall/tree/main/internal/templates/).
 
 ## Extending templates
 

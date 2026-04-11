@@ -1,3 +1,8 @@
+---
+id: testing
+title: Testing
+---
+
 # Testing
 
 We maintain a test suite covering unit tests, integration tests, and smoke tests.
@@ -15,7 +20,7 @@ go test ./...
 go test -v -run 'TestIntegration|TestLinux|TestMacOS' ./internal/sandbox/...
 
 # Run smoke tests (end-to-end)
-./scripts/smoke_test.sh
+.https://github.com/GreyhavenHQ/greywall/blob/main/scripts/smoke_test.sh
 ```
 
 ## Test Types
@@ -36,9 +41,9 @@ Integration tests verify that the sandbox actually restricts/allows operations a
 
 **Files:**
 
-- [`internal/sandbox/integration_test.go`](/internal/sandbox/integration_test.go) - Cross-platform tests
-- [`internal/sandbox/integration_linux_test.go`](/internal/sandbox/integration_linux_test.go) - Linux-specific (Landlock, seccomp, bwrap)
-- [`internal/sandbox/integration_macos_test.go`](/internal/sandbox/integration_macos_test.go) - macOS-specific (Seatbelt)
+- [`internal/sandbox/integration_test.go`](https://github.com/GreyhavenHQ/greywall/blob/main/internal/sandbox/integration_test.go) - Cross-platform tests
+- [`internal/sandbox/integration_linux_test.go`](https://github.com/GreyhavenHQ/greywall/blob/main/internal/sandbox/integration_linux_test.go) - Linux-specific (Landlock, seccomp, bwrap)
+- [`internal/sandbox/integration_macos_test.go`](https://github.com/GreyhavenHQ/greywall/blob/main/internal/sandbox/integration_macos_test.go) - macOS-specific (Seatbelt)
 
 **What they test:**
 
@@ -97,7 +102,7 @@ For full test coverage including Landlock, run the smoke tests against the built
 
 Smoke tests verify the compiled `greywall` binary works end-to-end. Unlike integration tests (which test internal Go APIs), smoke tests exercise the CLI interface.
 
-**File:** [`scripts/smoke_test.sh`](/scripts/smoke_test.sh)
+**File:** [`scripts/smoke_test.sh`](https://github.com/GreyhavenHQ/greywall/blob/main/scripts/smoke_test.sh)
 
 **What they test:**
 
@@ -112,13 +117,13 @@ Smoke tests verify the compiled `greywall` binary works end-to-end. Unlike integ
 
 ```bash
 # Build and test
-./scripts/smoke_test.sh
+.https://github.com/GreyhavenHQ/greywall/blob/main/scripts/smoke_test.sh
 
 # Test specific binary
-./scripts/smoke_test.sh ./path/to/greywall
+.https://github.com/GreyhavenHQ/greywall/blob/main/scripts/smoke_test.sh ./path/to/greywall
 
 # Enable network tests (requires internet)
-GREYWALL_TEST_NETWORK=1 ./scripts/smoke_test.sh
+GREYWALL_TEST_NETWORK=1 .https://github.com/GreyhavenHQ/greywall/blob/main/scripts/smoke_test.sh
 ```
 
 ## Platform-Specific Behavior
@@ -203,7 +208,7 @@ func TestLinux_CustomFeature(t *testing.T) {
 
 ## CI
 
-A [GitHub Actions workflow](/.github/workflows/main.yml) runs build, lint, and platform-specific tests.
+A [GitHub Actions workflow](https://github.com/GreyhavenHQ/greywall/blob/main/.github/workflows/main.yml) runs build, lint, and platform-specific tests.
 
 Tests are designed to pass in CI environments (all dependencies installed) and local development machines (either Linux or MacOS).
 

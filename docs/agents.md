@@ -1,3 +1,8 @@
+---
+id: agents
+title: AI Agent Integration
+---
+
 # Using Greywall with AI Agents
 
 Many popular coding agents already include sandboxing. Greywall can still be useful when you want a tool-agnostic policy layer that works the same way across:
@@ -37,10 +42,10 @@ greywall --settings ./greywall.json <agent-command>
 
 We provide these template for guardrailing CLI coding agents:
 
-- [`code`](/internal/templates/code.json) - Routes all network traffic through an external SOCKS5 proxy. Protects secrets, restricts dangerous commands.
-- [`code-relaxed`](/internal/templates/code-relaxed.json) - Same filesystem/command protections as `code`, with relaxed network settings for environments where TUN is unavailable.
+- [`code`](https://github.com/GreyhavenHQ/greywall/blob/main/internal/templates/code.json) - Routes all network traffic through an external SOCKS5 proxy. Protects secrets, restricts dangerous commands.
+- [`code-relaxed`](https://github.com/GreyhavenHQ/greywall/blob/main/internal/templates/code-relaxed.json) - Same filesystem/command protections as `code`, with relaxed network settings for environments where TUN is unavailable.
 
-You can use it like `greywall -t code -- claude`.
+You can use it like `greywall --profile code -- claude`.
 
 | Agent | Works with template | Notes |
 |-------|--------| ----- |
@@ -63,4 +68,4 @@ Greywall includes additional "dangerous file protection" (writes blocked regardl
 - shell startup files (`.zshrc`, `.bashrc`, etc.)
 - some editor/tool config directories
 
-See [`ARCHITECTURE.md`](/ARCHITECTURE.md) for the full list and rationale.
+See [Architecture](./architecture) for the full list and rationale.
