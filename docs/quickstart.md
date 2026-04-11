@@ -28,7 +28,10 @@ The script downloads the latest release from GitHub, verifies its checksum, inst
 
 ```bash
 go install github.com/GreyhavenHQ/greywall/cmd/greywall@latest
+greywall setup
 ```
+
+`go install` only places the greywall binary on your `$PATH`. Run `greywall setup` afterwards to install and start [greyproxy](/greyproxy), which greywall relies on for network filtering. Without it, the sandbox has no reachable network.
 
 ### Using mise
 

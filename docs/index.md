@@ -49,7 +49,10 @@ curl -fsSL https://raw.githubusercontent.com/GreyhavenHQ/greywall/main/install.s
 
 ```bash
 go install github.com/GreyhavenHQ/greywall/cmd/greywall@latest
+greywall setup
 ```
+
+`go install` places the binary on your `$PATH`; `greywall setup` installs and starts [greyproxy](/greyproxy), which greywall relies on for network filtering.
 
 **[mise](https://mise.jdx.dev/):**
 
