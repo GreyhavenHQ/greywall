@@ -45,6 +45,7 @@ var (
 	linuxFeatures          bool
 	learning               bool
 	profileName            string
+	noNetworkRules         bool
 	autoProfile            bool
 	noCredentialProtection bool
 	injectLabels           []string
@@ -126,6 +127,7 @@ Configuration file format:
 	rootCmd.Flags().BoolVar(&linuxFeatures, "linux-features", false, "Show available Linux security features and exit")
 	rootCmd.Flags().BoolVar(&learning, "learning", false, "Run in learning mode: trace filesystem access and generate a config profile")
 	rootCmd.Flags().StringVar(&profileName, "profile", "", "Load profiles by name, comma-separated (e.g. --profile claude,uv)")
+	rootCmd.Flags().BoolVar(&noNetworkRules, "no-network-rules", false, "Skip applying profile network rules to greyproxy (filesystem + keyring still apply)")
 	rootCmd.Flags().BoolVar(&autoProfile, "auto-profile", false, "Use saved or built-in profile without prompting")
 	rootCmd.Flags().BoolVar(&noCredentialProtection, "no-credential-protection", false, "Disable credential substitution (real credentials visible in sandbox)")
 	rootCmd.Flags().StringArrayVar(&injectLabels, "inject", nil, "Inject a global credential by label (can be used multiple times, e.g. --inject ANTHROPIC_API_KEY)")
@@ -416,30 +418,37 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build session network rules from profile config + --allow CLI flags.
+	// --no-network-rules suppresses profile-sourced rules; CLI --allow still applies.
 	var sessionNetworkRules []sandbox.NetworkRuleInput
 	defaultNote := "greywall profile"
 	if cmdName != "" {
 		defaultNote = "greywall profile: " + cmdName
 	}
-	for _, r := range cfg.Network.Rules {
-		port := r.Port
-		if port == "" {
-			port = "*"
+	if noNetworkRules {
+		if debug && len(cfg.Network.Rules) > 0 {
+			fmt.Fprintf(os.Stderr, "[greywall] --no-network-rules: dropping %d profile rule(s)\n", len(cfg.Network.Rules))
 		}
-		action := r.Action
-		if action == "" {
-			action = "allow"
+	} else {
+		for _, r := range cfg.Network.Rules {
+			port := r.Port
+			if port == "" {
+				port = "*"
+			}
+			action := r.Action
+			if action == "" {
+				action = "allow"
+			}
+			notes := r.Notes
+			if notes == "" {
+				notes = defaultNote
+			}
+			sessionNetworkRules = append(sessionNetworkRules, sandbox.NetworkRuleInput{
+				DestinationPattern: r.Destination,
+				PortPattern:        port,
+				Action:             action,
+				Notes:              notes,
+			})
 		}
-		notes := r.Notes
-		if notes == "" {
-			notes = defaultNote
-		}
-		sessionNetworkRules = append(sessionNetworkRules, sandbox.NetworkRuleInput{
-			DestinationPattern: r.Destination,
-			PortPattern:        port,
-			Action:             action,
-			Notes:              notes,
-		})
 	}
 	for _, dest := range allowDests {
 		// Parse "host:port" or just "host"
