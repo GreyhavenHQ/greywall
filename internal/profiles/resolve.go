@@ -157,7 +157,9 @@ type profileFS struct {
 }
 
 type profileConfig struct {
-	Filesystem profileFS `json:"filesystem"`
+	SchemaVersion int       `json:"schemaVersion"`
+	GeneratedBy   string    `json:"generatedBy,omitempty"`
+	Filesystem    profileFS `json:"filesystem"`
 }
 
 // SaveAsTemplate serializes a profile config to disk so it auto-loads on
@@ -165,6 +167,8 @@ type profileConfig struct {
 // matching the format produced by --learning.
 func SaveAsTemplate(cfg *config.Config, cmdName string, debug bool) error {
 	p := profileConfig{
+		SchemaVersion: config.CurrentSchemaVersion,
+		GeneratedBy:   sandbox.GreywallVersion(),
 		Filesystem: profileFS{
 			AllowRead:  nonNil(cfg.Filesystem.AllowRead),
 			AllowWrite: nonNil(cfg.Filesystem.AllowWrite),

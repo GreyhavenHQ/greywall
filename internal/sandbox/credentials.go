@@ -255,15 +255,15 @@ type NetworkRuleInput struct {
 
 // sessionRequest is the JSON body for POST /api/sessions.
 type sessionRequest struct {
-	SessionID         string            `json:"session_id"`
-	ContainerName     string            `json:"container_name"`
-	Mappings          map[string]string `json:"mappings,omitempty"`
-	Labels            map[string]string `json:"labels,omitempty"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
-	GlobalCredentials []string          `json:"global_credentials,omitempty"`
-	TTLSeconds        int               `json:"ttl_seconds"`
+	SessionID         string             `json:"session_id"`
+	ContainerName     string             `json:"container_name"`
+	Mappings          map[string]string  `json:"mappings,omitempty"`
+	Labels            map[string]string  `json:"labels,omitempty"`
+	Metadata          map[string]string  `json:"metadata,omitempty"`
+	GlobalCredentials []string           `json:"global_credentials,omitempty"`
+	TTLSeconds        int                `json:"ttl_seconds"`
 	NetworkRules      []NetworkRuleInput `json:"network_rules,omitempty"`
-	AllowAll          bool              `json:"allow_all,omitempty"`
+	AllowAll          bool               `json:"allow_all,omitempty"`
 }
 
 // SessionMetadata holds context about the sandboxed process for dashboard display.

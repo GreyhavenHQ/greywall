@@ -155,6 +155,9 @@ Configuration file format:
 }
 
 func runCommand(cmd *cobra.Command, args []string) error {
+	// Record greywall version for profile stamping and drift detection.
+	sandbox.SetGreywallVersion(version)
+
 	if showVersion {
 		fmt.Printf("greywall - lightweight, container-free sandbox for running untrusted commands\n")
 		fmt.Printf("  Version: %s\n", version)
@@ -265,6 +268,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to load saved profile: %v\n", loadErr)
 				}
 			case savedCfg != nil:
+				savedCfg = maybeResolveDrift(savedCfg, cmdName)
 				cfg = config.Merge(cfg, savedCfg)
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall] Auto-loaded saved profile for %q\n", cmdName)
@@ -413,6 +417,10 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 	// Build session network rules from profile config + --allow CLI flags.
 	var sessionNetworkRules []sandbox.NetworkRuleInput
+	defaultNote := "greywall profile"
+	if cmdName != "" {
+		defaultNote = "greywall profile: " + cmdName
+	}
 	for _, r := range cfg.Network.Rules {
 		port := r.Port
 		if port == "" {
@@ -422,11 +430,15 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		if action == "" {
 			action = "allow"
 		}
+		notes := r.Notes
+		if notes == "" {
+			notes = defaultNote
+		}
 		sessionNetworkRules = append(sessionNetworkRules, sandbox.NetworkRuleInput{
 			DestinationPattern: r.Destination,
 			PortPattern:        port,
 			Action:             action,
-			Notes:              r.Notes,
+			Notes:              notes,
 		})
 	}
 	for _, dest := range allowDests {
@@ -602,7 +614,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "[greywall] failed to register network rules session: %v\n", err)
 				}
 			} else {
-				if regResult.RulesCreated > 0 {
+				if regResult.RulesCreated > 0 && debug {
 					fmt.Fprintf(os.Stderr, "[greywall] Network rules applied: %d rules from profile\n", regResult.RulesCreated)
 				}
 				if learning {
@@ -617,7 +629,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		for range sessionNetworkRules {
 			ruleCount++
 		}
-		if ruleCount > 0 {
+		if ruleCount > 0 && debug {
 			fmt.Fprintf(os.Stderr, "[greywall] Network rules applied: %d rules from profile\n", ruleCount)
 		}
 	}
@@ -759,6 +771,34 @@ func runCommand(cmd *cobra.Command, args []string) error {
 // resolveProfile resolves a single profile name to a config.
 // It tries a saved profile first, then falls back to a built-in profile.
 // Returns an error if the name can't be resolved at all.
+// maybeResolveDrift detects whether savedCfg is drifted from the bundled
+// profile for the given name and, if so, prompts the user (TTY only) and
+// applies their choice. Returns the effective config to use.
+func maybeResolveDrift(savedCfg *config.Config, name string) *config.Config {
+	canonical := profiles.IsKnownAgent(name)
+	if canonical == "" {
+		return savedCfg
+	}
+	bundled := profiles.GetAgentProfile(canonical)
+	if bundled == nil {
+		return savedCfg
+	}
+	drift := profiles.DetectDrift(savedCfg, bundled, version, name)
+	if !drift.HasDrift {
+		return savedCfg
+	}
+	action := profiles.PromptDriftResolution(drift, savedCfg, bundled)
+	resolved, err := profiles.ApplyDriftAction(action, savedCfg, bundled, name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to apply drift action: %v\n", err)
+		return savedCfg
+	}
+	if resolved == nil {
+		return savedCfg
+	}
+	return resolved
+}
+
 func resolveProfile(name string, debug bool) (*config.Config, error) {
 	// Try saved profile first
 	savedPath := sandbox.LearnedTemplatePath(name)
@@ -769,6 +809,7 @@ func resolveProfile(name string, debug bool) (*config.Config, error) {
 		}
 	}
 	if savedCfg != nil {
+		savedCfg = maybeResolveDrift(savedCfg, name)
 		if debug {
 			fmt.Fprintf(os.Stderr, "[greywall] Loaded saved profile for %q\n", name)
 		}

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/GreyhavenHQ/greywall/internal/config"
 )
 
 // TraceResult holds parsed read and write paths from a system trace log
@@ -425,6 +427,22 @@ func getSensitiveProjectDenyPatterns() []string {
 	}
 }
 
+// GreywallVersion is set from main via SetGreywallVersion so learned profiles
+// can be stamped with the greywall version that produced them.
+var greywallVersion = "dev"
+
+// SetGreywallVersion records the running greywall version for stamping.
+func SetGreywallVersion(v string) {
+	if v != "" {
+		greywallVersion = v
+	}
+}
+
+// GreywallVersion returns the recorded greywall version.
+func GreywallVersion() string {
+	return greywallVersion
+}
+
 // buildTemplate generates the JSONC profile content for a learned config.
 func buildTemplate(cmdName string, allowRead, allowWrite []string) string {
 	type fsConfig struct {
@@ -434,13 +452,17 @@ func buildTemplate(cmdName string, allowRead, allowWrite []string) string {
 		DenyRead   []string `json:"denyRead"`
 	}
 	type templateConfig struct {
-		Filesystem fsConfig `json:"filesystem"`
+		SchemaVersion int      `json:"schemaVersion"`
+		GeneratedBy   string   `json:"generatedBy,omitempty"`
+		Filesystem    fsConfig `json:"filesystem"`
 	}
 
 	// Combine sensitive read patterns with .env project patterns
 	denyRead := append(getSensitiveReadPatterns(), getSensitiveProjectDenyPatterns()...)
 
 	cfg := templateConfig{
+		SchemaVersion: config.CurrentSchemaVersion,
+		GeneratedBy:   greywallVersion,
 		Filesystem: fsConfig{
 			AllowRead:  allowRead,
 			AllowWrite: allowWrite,

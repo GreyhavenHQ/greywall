@@ -14,6 +14,11 @@ import (
 	"github.com/tidwall/jsonc"
 )
 
+// CurrentSchemaVersion is the current learned-profile schema version.
+// Bump this when the structure of saved profile files changes in a way
+// that requires migration or invalidates older stamps.
+const CurrentSchemaVersion = 1
+
 // Config is the main configuration for greywall.
 type Config struct {
 	Extends     string           `json:"extends,omitempty"`
@@ -24,6 +29,16 @@ type Config struct {
 	Credentials CredentialConfig `json:"credentials,omitempty"`
 	AllowPty    bool             `json:"allowPty,omitempty"`
 	AllowAudio  bool             `json:"allowAudio,omitempty"`
+
+	// SchemaVersion is the learned-profile schema version (stamped on write).
+	// 0/missing means the file predates versioned stamps.
+	SchemaVersion int `json:"schemaVersion,omitempty"`
+	// GeneratedBy records the greywall version that produced this file.
+	GeneratedBy string `json:"generatedBy,omitempty"`
+	// DriftAckHash records a hash of the last drift diff the user explicitly
+	// ignored. If the bundled profile drifts to a different delta, this hash
+	// no longer matches and the prompt reappears.
+	DriftAckHash string `json:"driftAckHash,omitempty"`
 }
 
 // CredentialConfig defines credential injection and protection settings.
@@ -36,10 +51,10 @@ type CredentialConfig struct {
 // NetworkRule defines a network allow/deny rule sent to greyproxy as part of session creation.
 // These rules are scoped to the session lifetime and auto-deleted when the session ends.
 type NetworkRule struct {
-	Destination string `json:"destination"`          // Domain/IP pattern (e.g. "api.openai.com", "**.openai.com", "192.168.0.0/24")
-	Port        string `json:"port,omitempty"`       // Port pattern (default "*"); supports exact, ranges ("8000-9000"), comma-separated
-	Action      string `json:"action,omitempty"`     // "allow" (default) or "deny"
-	Notes       string `json:"notes,omitempty"`      // Optional documentation
+	Destination string `json:"destination"`      // Domain/IP pattern (e.g. "api.openai.com", "**.openai.com", "192.168.0.0/24")
+	Port        string `json:"port,omitempty"`   // Port pattern (default "*"); supports exact, ranges ("8000-9000"), comma-separated
+	Action      string `json:"action,omitempty"` // "allow" (default) or "deny"
+	Notes       string `json:"notes,omitempty"`  // Optional documentation
 }
 
 // NetworkConfig defines network restrictions.
