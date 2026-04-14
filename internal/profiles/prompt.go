@@ -100,6 +100,31 @@ func hasWorkingDir(paths []string) bool {
 	return false
 }
 
+// formatNetworkRule renders a single network rule as "destination" or
+// "destination:port" when a non-wildcard port is set.
+func formatNetworkRule(r config.NetworkRule) string {
+	if r.Port == "" || r.Port == "*" {
+		return r.Destination
+	}
+	return r.Destination + ":" + r.Port
+}
+
+// formatNetworkRules returns a display string for the rules whose action matches.
+func formatNetworkRules(rules []config.NetworkRule, action string) string {
+	display := make([]string, 0, len(rules))
+	for _, r := range rules {
+		a := r.Action
+		if a == "" {
+			a = "allow"
+		}
+		if a != action {
+			continue
+		}
+		display = append(display, formatNetworkRule(r))
+	}
+	return strings.Join(display, "  ")
+}
+
 // PromptFirstRun shows the profile summary and asks the user how to proceed.
 func PromptFirstRun(agentName string, profile *config.Config, w io.Writer, r io.Reader) PromptResponse {
 	c := newColorizer(w)
@@ -130,6 +155,14 @@ func PromptFirstRun(agentName string, profile *config.Config, w io.Writer, r io.
 	}
 	if len(profile.Filesystem.DenyWrite) > 0 {
 		fmt.Fprintf(w, "%s  %s\n", c.red("Deny write:"), formatPaths(profile.Filesystem.DenyWrite)) //nolint:errcheck,gosec
+	}
+
+	// Network rules are forwarded to greyproxy as session-scoped rules.
+	if allowNet := formatNetworkRules(profile.Network.Rules, "allow"); allowNet != "" {
+		fmt.Fprintf(w, "%s  %s\n", c.green("Allow net: "), allowNet) //nolint:errcheck,gosec
+	}
+	if denyNet := formatNetworkRules(profile.Network.Rules, "deny"); denyNet != "" {
+		fmt.Fprintf(w, "%s   %s\n", c.red("Deny net:"), denyNet) //nolint:errcheck,gosec
 	}
 
 	fmt.Fprintln(w) //nolint:errcheck
