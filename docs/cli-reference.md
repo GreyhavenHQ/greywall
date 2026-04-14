@@ -33,6 +33,7 @@ greywall <subcommand> [args...]
 | `--inject <LABEL>` | | Inject a credential stored in the greyproxy dashboard into the sandbox by label (repeatable) |
 | `--ignore-secret <VAR>` | | Exclude a variable from credential detection even if it matches the heuristics (repeatable) |
 | `--no-credential-protection` | | Disable credential substitution entirely; real values are visible inside the sandbox |
+| `--no-network-rules` | | Skip pushing the profile's network rules to greyproxy. Filesystem and keyring restrictions from the profile still apply, and `--allow` rules are still forwarded. See [Templates](./templates#network-rules-and---no-network-rules). |
 | `--linux-features` | | Print the Linux kernel security features available on the current system and exit |
 | `--version` | `-v` | Print the greywall version and exit |
 | `--help` | `-h` | Show help |

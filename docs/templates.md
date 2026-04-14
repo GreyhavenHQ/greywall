@@ -83,6 +83,22 @@ This config:
 - Protects company-specific secret directories
 - Blocks publishing commands
 
+## Network rules and `--no-network-rules`
+
+Profiles can declare network rules under the `network.rules` field. When greywall starts a sandboxed command with a profile, those rules are forwarded to greyproxy as **session-scoped rules**: greyproxy attaches them to the session it creates for the sandbox, and deletes them automatically when the session ends or is superseded by a newer session for the same container. You can see them in the greyproxy dashboard tagged with the session source.
+
+If you want to run a command with a profile's filesystem and credential restrictions but **without** its network allow list (for example, to force every destination through the dashboard's pending-request flow), pass `--no-network-rules`:
+
+```bash
+# Use the claude profile's filesystem + keyring rules, but no network allow list
+greywall --profile claude --no-network-rules -- claude
+```
+
+Notes:
+
+- `--allow host[:port]` entries on the CLI are still forwarded as session rules, even with `--no-network-rules`. The flag only suppresses rules that come from the loaded profile.
+- Starting a new session for a container immediately supersedes the previous session's rules, so running `greywall --no-network-rules` against a container that had an active profile session will block the inherited rules right away (no need to wait for the previous session to expire).
+
 ## Available Templates
 
 | Template | Description |

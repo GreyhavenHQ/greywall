@@ -243,7 +243,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 
 	// Load profiles. In learning mode with --blank, skip profile loading entirely.
 	// In learning mode without --blank, load profiles for network rules only.
-	if !(learning && blankProfile) {
+	if !learning || !blankProfile {
 		if profileName != "" {
 			// Explicit --profile flag: resolve each comma-separated name
 			names := strings.Split(profileName, ",")
@@ -550,7 +550,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 					if debug {
 						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to register session: %v (credentials will be visible)\n", err)
 					}
-					credMappings = nil
+					// credMappings is still nil from declaration; nothing to clear.
 					// Clean up rewritten files since we can't register them.
 					sandbox.CleanupRewrittenFiles(rewrittenEnvFiles)
 					rewrittenEnvFiles = nil
