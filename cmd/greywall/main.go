@@ -36,6 +36,7 @@ var (
 	settingsPath           string
 	proxyURL               string
 	httpProxyURL           string
+	proxyUserFlag          string
 	dnsAddr                string
 	cmdString              string
 	exposePorts            []string
@@ -120,6 +121,7 @@ Configuration file format:
 	rootCmd.Flags().StringVar(&proxyURL, "proxy", "", "External SOCKS5 proxy URL (default: socks5://localhost:43052)")
 	rootCmd.Flags().StringVar(&dnsAddr, "dns", "", "DNS server address on host (default: localhost:43053)")
 	rootCmd.Flags().StringVar(&httpProxyURL, "http-proxy", "", "HTTP CONNECT proxy URL (default: http://localhost:43051)")
+	rootCmd.Flags().StringVar(&proxyUserFlag, "proxy-user", "", "SOCKS5/HTTP proxy username to inject into the configured proxy URL (overrides any existing userinfo and the default auto-detected command name). Lets the upstream proxy match per-client rules by login.")
 	rootCmd.Flags().StringVarP(&cmdString, "c", "c", "", "Run command string directly (like sh -c)")
 	rootCmd.Flags().StringArrayVarP(&exposePorts, "port", "p", nil, "Expose port for inbound connections (can be used multiple times)")
 	rootCmd.Flags().StringArrayVarP(&forwardPorts, "forward", "f", nil, "Forward host localhost port into sandbox (can be used multiple times)")
@@ -340,11 +342,17 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Auto-inject proxy credentials so the proxy can identify the sandboxed command.
-	// - If a command name is available, use it as the username with "proxy" as password.
-	// - If no command name, default to "proxy:proxy" (required by gost for auth).
+	// Precedence (highest wins):
+	//   1. --proxy-user <name>   (explicit caller override, e.g. for per-agent
+	//                             identity in a multi-tenant setup)
+	//   2. cmdName               (auto-detected from the wrapped command)
+	//   3. "proxy"               (fallback, required by gost for auth)
 	// This always overrides any existing credentials in the URL.
 	proxyUser := "proxy"
-	if cmdName != "" {
+	switch {
+	case proxyUserFlag != "":
+		proxyUser = proxyUserFlag
+	case cmdName != "":
 		proxyUser = cmdName
 	}
 	for _, proxyField := range []*string{&cfg.Network.ProxyURL, &cfg.Network.HTTPProxyURL} {
@@ -356,7 +364,14 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if debug {
-		fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy credentials to %q:proxy\n", proxyUser)
+		source := "default"
+		switch {
+		case proxyUserFlag != "":
+			source = "--proxy-user"
+		case cmdName != "":
+			source = "command name"
+		}
+		fmt.Fprintf(os.Stderr, "[greywall] Auto-set proxy credentials to %q:proxy (source: %s)\n", proxyUser, source)
 	}
 
 	// Merge CLI forward ports into config
