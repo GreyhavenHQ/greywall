@@ -1,3 +1,8 @@
+---
+id: platform-support
+title: Platform Support
+---
+
 # Platform Support
 
 Greywall supports Linux and macOS with platform-specific sandboxing technologies.
@@ -17,7 +22,7 @@ Greywall supports Linux and macOS with platform-specific sandboxing technologies
 | **Network isolation** | ✅ (network namespace) | N/A |
 | **Command allow/deny lists** | ✅ | ✅ |
 | **Credential substitution (env vars)** | ✅ | ✅ |
-| **Credential substitution (.env files)** | ✅ (bind-mount rewrite) | ⚠️ (files denied; see below) |
+| **Credential substitution (`.env` files)** | ✅ (bind-mount rewrite) | ⚠️ (files denied; see below) |
 | **Environment sanitization** | ✅ | ✅ |
 | **Learning mode** | ✅ (strace) | ✅ (eslogger, requires sudo) |
 | **PTY support** | ✅ | ✅ |
@@ -36,13 +41,13 @@ Greywall uses [bubblewrap](https://github.com/containers/bubblewrap) for contain
 
 All features degrade gracefully when the kernel or permissions don't support them. Run `greywall --linux-features` to see what's available on your system.
 
-**Dependencies:** `bubblewrap`, `socat`, `xdg-dbus-proxy` (optional, for notify-send support)
+**Dependencies:** `bubblewrap`, `socat`, and `xdg-dbus-proxy` (optional, for `notify-send` support inside the sandbox).
 
 ## macOS
 
 Greywall uses `sandbox-exec` with dynamically generated [Seatbelt](https://reverse.put.as/wp-content/uploads/2011/09/Apple-Sandbox-Guide-v1.0.pdf) profiles. The Seatbelt profile controls file reads/writes, network access, process operations, and Mach IPC.
 
-Network traffic is routed through greyproxy via `ALL_PROXY` / `HTTP_PROXY` environment variables. There is no full traffic capture (no TUN device or DNS bridge) — only applications that honor proxy environment variables are redirected.
+Network traffic is routed through greyproxy via `ALL_PROXY` / `HTTP_PROXY` environment variables. There is no full traffic capture (no TUN device or DNS bridge), so only applications that honor proxy environment variables are redirected.
 
 Learning mode uses Apple's Endpoint Security framework via `eslogger` to trace filesystem access. This requires `sudo` (only `eslogger` runs as root, the sandboxed command runs as the current user).
 
@@ -52,8 +57,8 @@ Learning mode uses Apple's Endpoint Security framework via `eslogger` to trace f
 
 On Linux, greywall uses bubblewrap's `--ro-bind` to mount rewritten `.env` files (containing credential placeholders) over the originals. The sandboxed process reads `.env` as usual and gets placeholder values transparently.
 
-macOS lacks bind-mount namespaces. Seatbelt profiles can control whether a file is readable but cannot redirect reads to a different file. As a result, `.env` files are **denied entirely** in the sandbox profile when credential substitution is active. The sandboxed process receives a permission-denied error if it tries to read them.
+macOS has no equivalent of bind-mount namespaces. A Seatbelt profile can control whether a file is readable but cannot redirect a read to a different file. As a result, `.env` files are **denied entirely** in the sandbox profile when credential substitution is active, and the sandboxed process receives a permission-denied error if it tries to read them.
 
 This affects applications that read credentials from `.env` files on disk rather than from environment variables. Environment variable substitution works identically on both platforms.
 
-**Workaround**: use `--inject` to provide credentials as environment variables (with placeholder values) instead of relying on `.env` files. See [credential-protection.md](credential-protection.md) for details.
+**Workaround**: use `--inject` to provide credentials as environment variables (with placeholder values) instead of relying on `.env` files. See [Credential Protection](./credential-protection) for the full walkthrough.

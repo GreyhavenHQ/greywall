@@ -260,6 +260,7 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 			UseEBPF:           true,
 			Debug:             m.debug,
 			RewrittenEnvFiles: m.rewrittenEnvFiles,
+			AllowAudio:        m.config != nil && m.config.AllowAudio,
 		})
 	default:
 		return "", fmt.Errorf("unsupported platform: %s", plat)

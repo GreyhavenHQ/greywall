@@ -10,6 +10,13 @@ func init() {
 		Names: []string{"auggie"},
 		Overlay: func() *config.Config {
 			return &config.Config{
+				Network: config.NetworkConfig{
+					Rules: []config.NetworkRule{
+						{Destination: "api.openai.com", Port: "443", Action: "allow"},
+						{Destination: "api.anthropic.com", Port: "443", Action: "allow"},
+						{Destination: "**.augmentcode.com", Port: "443", Action: "allow"},
+					},
+				},
 				Filesystem: config.FilesystemConfig{
 					AllowRead:  []string{"~/.augment"},
 					AllowWrite: []string{"~/.augment"},

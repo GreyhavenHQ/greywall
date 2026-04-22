@@ -4,6 +4,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Go](https://img.shields.io/github/go-mod/go-version/GreyhavenHQ/greywall)](go.mod)
 [![Release](https://img.shields.io/github/v/release/GreyhavenHQ/greywall)](https://github.com/GreyhavenHQ/greywall/releases)
+[![Product Hunt](https://img.shields.io/badge/Product%20Hunt-Greywall-orange?logo=producthunt)](https://www.producthunt.com/products/greywall?launch=greywall)
 
 Greywall is a container-free, deny-by-default sandbox for AI agents on Linux and macOS. It restricts filesystem access, network connections, and system calls to only what you explicitly allow, so tools like Claude Code, Cursor, Codex, and other AI coding agents can't access your SSH keys, environment secrets, or anything outside the working directory.
 

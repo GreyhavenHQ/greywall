@@ -191,6 +191,12 @@ func TestPromptFirstRun(t *testing.T) {
 	if !strings.Contains(output, "Deny read:") {
 		t.Error("prompt output should show Deny read paths")
 	}
+	if !strings.Contains(output, "Allow net:") {
+		t.Error("prompt output should show Allow net rules for profiles with network rules")
+	}
+	if !strings.Contains(output, "api.anthropic.com") {
+		t.Error("prompt output should list the profile's network destinations")
+	}
 	if !strings.Contains(output, "[e]") {
 		t.Error("prompt output should show edit option")
 	}

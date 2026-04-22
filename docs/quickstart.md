@@ -1,20 +1,51 @@
+---
+id: quickstart
+title: Quickstart
+---
+
 # Quickstart
 
 ## Installation
 
-### From Source (recommended for now)
+### Homebrew (macOS)
+
+```bash
+brew tap greyhavenhq/tap
+brew install greywall
+```
+
+This also installs [Greyproxy](../greyproxy) as a dependency.
+
+### Linux / Mac install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GreyhavenHQ/greywall/main/install.sh | sh
+```
+
+The script downloads the latest release from GitHub, verifies its checksum, installs the binary to `~/.local/bin/greywall`, and then runs `greywall setup` to install and start greyproxy. Set `INSTALL_DIR` to pick a different install location, or pass a version tag (e.g. `sh -s -- v0.1.0`) to pin a specific release.
+
+### Using Go install
+
+```bash
+go install github.com/GreyhavenHQ/greywall/cmd/greywall@latest
+greywall setup
+```
+
+`go install` only places the greywall binary on your `$PATH`. Run `greywall setup` afterwards to install and start [greyproxy](/greyproxy), which greywall relies on for network filtering. Without it, the sandbox has no reachable network.
+
+### Using mise
+
+```bash
+mise use -g github:GreyhavenHQ/greywall
+mise use -g github:GreyhavenHQ/greyproxy
+```
+
+### From source
 
 ```bash
 git clone https://github.com/GreyhavenHQ/greywall
 cd greywall
-go build -o greywall ./cmd/greywall
-sudo mv greywall /usr/local/bin/
-```
-
-### Using Go Install
-
-```bash
-go install github.com/GreyhavenHQ/greywall/cmd/greywall@latest
+make setup && make build
 ```
 
 ### Linux Dependencies
@@ -32,7 +63,7 @@ sudo dnf install bubblewrap socat xdg-dbus-proxy libsecret
 sudo pacman -S bubblewrap socat xdg-dbus-proxy libsecret
 ```
 
-`xdg-dbus-proxy` is optional but recommended (enables `notify-send` inside the sandbox). `libsecret-tools` provides `secret-tool` for injecting keyring credentials (e.g., gh OAuth token) into the sandbox.
+`xdg-dbus-proxy` is optional but recommended (it enables `notify-send` inside the sandbox). `libsecret-tools` provides `secret-tool`, which greywall uses to inject keyring credentials (for example a `gh` OAuth token) into the sandbox.
 
 ### Do I need sudo to run greywall?
 
@@ -41,13 +72,15 @@ No, for most Linux systems. Greywall works without root privileges because:
 - Package-manager-installed `bubblewrap` is typically already setuid
 - Greywall detects available capabilities and adapts automatically
 
-If some features aren't available (like network namespaces in Docker/CI), greywall falls back gracefully - you'll still get filesystem isolation, command blocking, and proxy-based network routing.
+If some features aren't available (like network namespaces in Docker/CI), greywall falls back gracefully — you'll still get filesystem isolation, command blocking, and proxy-based network routing.
 
 Run `greywall --linux-features` to see what's available in your environment.
 
-### Install GreyProxy (optional)
+### Install Greyproxy (optional)
 
-GreyProxy provides SOCKS5 proxying and DNS resolution for sandboxed commands. Without it, all network access is blocked.
+[Greyproxy](../greyproxy) provides SOCKS5 proxying and a live allow/deny dashboard for sandboxed commands. Without it (or another SOCKS5 proxy), all network access is blocked.
+
+You can use any SOCKS5 proxy with greywall — greyproxy is the recommended companion but not required.
 
 ```bash
 # Install and start greyproxy
@@ -68,16 +101,16 @@ greywall check
 
 ## Your First Sandboxed Command
 
-By default, greywall routes traffic through the GreyProxy SOCKS5 proxy at `localhost:43052` with DNS via `localhost:43053`. If greyproxy is not running, all network access is blocked:
+By default, greywall routes traffic through the Greyproxy SOCKS5 proxy at `localhost:43052` with DNS via `localhost:43053`. If no proxy is running, all network access is blocked:
 
 ```bash
-# This will fail if greyproxy is not running
+# This will fail if no proxy is running
 greywall curl https://example.com
 ```
 
 You should see something like:
 
-```text
+```
 curl: (7) Failed to connect to ... Connection refused
 ```
 
@@ -91,7 +124,7 @@ You can override the default proxy with `--proxy`:
 greywall --proxy socks5://localhost:1080 curl https://example.com
 ```
 
-Or in a config file at `~/.config/greywall/greywall.json` (or `~/Library/Application Support/greywall/greywall.json` on macOS):
+Or in a config file at `~/.config/greywall/greywall.json` (macOS: `~/Library/Application Support/greywall/greywall.json`):
 
 ```json
 {
@@ -108,12 +141,6 @@ Use `-d` to see what's happening under the hood:
 ```bash
 greywall -d curl https://example.com
 ```
-
-This shows:
-
-- The sandbox command being run
-- Proxy activity (allowed/blocked requests)
-- Filter rule matches
 
 ## Monitor Mode
 
@@ -145,12 +172,8 @@ If you're running a server that needs to accept connections:
 greywall -p 3000 -c "npm run dev"
 ```
 
-This allows external connections to port 3000 while keeping outbound network restricted.
+## Next Steps
 
-## Next steps
-
-- Read **[Why Greywall](why-greywall.md)** to understand when greywall is a good fit (and when it isn't).
-- Learn the mental model in **[Concepts](concepts.md)**.
-- Use **[Troubleshooting](troubleshooting.md)** if something is blocked unexpectedly.
-- Start from copy/paste configs in **[`docs/templates/`](templates/README.md)**.
-- Follow workflow-specific guides in **[Recipes](recipes/README.md)** (npm/pip/git/CI).
+- Read **[Why Greywall](./why-greywall)** to understand when greywall is a good fit (and when it isn't).
+- Learn the mental model in **[Concepts](./concepts)**.
+- Use **[Troubleshooting](./troubleshooting)** if something is blocked unexpectedly.

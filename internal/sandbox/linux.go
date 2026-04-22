@@ -130,6 +130,10 @@ type LinuxSandboxOptions struct {
 	// credential-substituted content. When set, these files are bind-mounted
 	// read-only instead of being masked with an empty file.
 	RewrittenEnvFiles map[string]string
+	// AllowAudio exposes PulseAudio and PipeWire sockets so sandboxed processes
+	// can produce audio output. Disabled by default because these sockets also
+	// allow microphone capture and (via PipeWire) camera/screen access.
+	AllowAudio bool
 }
 
 // NewProxyBridge creates a Unix socket bridge to an external SOCKS5 proxy.
@@ -485,6 +489,54 @@ func (b *DbusBridge) Cleanup() {
 	}
 }
 
+// audioSocketArgs returns bwrap arguments to expose PulseAudio and PipeWire
+// sockets inside a sandbox that has a tmpfs over /run/user. Audio tools
+// (piper, kokoro, aplay, paplay, etc.) need these sockets to reach the host
+// audio server; /dev/snd alone is not sufficient on systems using PulseAudio
+// or PipeWire as the audio abstraction layer.
+//
+// Security note: these sockets also allow microphone capture and, via PipeWire,
+// camera/screen access. Only call this when AllowAudio is explicitly set.
+//
+// userRunDirCreated must be true if a --dir userRunDir entry was already added
+// to the argument list before this call, so this function knows whether it
+// needs to emit the --dir entry itself.
+func audioSocketArgs(userRunDir string, userRunDirCreated bool, debug bool) []string {
+	var args []string
+	madeUserRunDir := userRunDirCreated
+
+	// PulseAudio socket lives in a subdirectory: /run/user/<uid>/pulse/native
+	pulseDir := filepath.Join(userRunDir, "pulse")
+	pulseSocket := filepath.Join(pulseDir, "native")
+	if fileExists(pulseSocket) {
+		if !madeUserRunDir {
+			args = append(args, "--dir", userRunDir)
+			madeUserRunDir = true
+		}
+		args = append(args, "--dir", pulseDir)
+		args = append(args, "--bind", pulseSocket, pulseSocket)
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Audio: PulseAudio socket exposed (%s)\n", pulseSocket)
+		}
+	}
+
+	// PipeWire socket: /run/user/<uid>/pipewire-0
+	pipewireSocket := filepath.Join(userRunDir, "pipewire-0")
+	if fileExists(pipewireSocket) {
+		if !madeUserRunDir {
+			args = append(args, "--dir", userRunDir)
+			madeUserRunDir = true
+		}
+		args = append(args, "--bind", pipewireSocket, pipewireSocket)
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Audio: PipeWire socket exposed (%s)\n", pipewireSocket)
+		}
+	}
+
+	_ = madeUserRunDir // consumed above; silence unused-variable linter
+	return args
+}
+
 // dbusIsolationArgs returns bwrap arguments to block the D-Bus session bus.
 // The D-Bus session socket at /run/user/<uid>/bus allows sandboxed processes to
 // communicate with host services (GVFS for arbitrary file reads, gnome-keyring
@@ -493,9 +545,10 @@ func (b *DbusBridge) Cleanup() {
 // If a DbusBridge is provided, its filtered socket is bind-mounted as the session
 // bus, allowing only org.freedesktop.Notifications (notify-send).
 //
-// This also blocks SSH agent, GPG agent, Wayland, PipeWire, and other sockets
-// under /run/user/. SSH/GPG can be re-added via allowRead in the config if needed.
-func dbusIsolationArgs(dbusBridge *DbusBridge, debug bool) []string {
+// When allowAudio is true, PulseAudio and PipeWire sockets are also re-exposed.
+// SSH/GPG agents and Wayland are still blocked; they can be re-added via
+// allowRead in the config if needed.
+func dbusIsolationArgs(dbusBridge *DbusBridge, allowAudio bool, debug bool) []string {
 	if !fileExists("/run/user") {
 		return nil
 	}
@@ -505,16 +558,24 @@ func dbusIsolationArgs(dbusBridge *DbusBridge, debug bool) []string {
 
 	args := []string{"--tmpfs", "/run/user"}
 
+	userRunDirCreated := false
 	// If we have a filtered D-Bus proxy, bind-mount it as the session bus socket
 	// so notify-send works while everything else (GVFS, keyring, etc.) is blocked
 	if dbusBridge != nil {
 		args = append(args, "--dir", userRunDir)
+		userRunDirCreated = true
 		args = append(args, "--bind", dbusBridge.SocketPath, filepath.Join(userRunDir, "bus"))
 		if debug {
 			fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus session bus filtered (only org.freedesktop.Notifications allowed)\n")
 		}
 	} else if debug {
 		fmt.Fprintf(os.Stderr, "[greywall:linux] D-Bus session bus isolated (--tmpfs /run/user)\n")
+	}
+
+	// Re-expose audio sockets only when explicitly opted in (allowAudio: true).
+	// These sockets also allow microphone capture and screen access via PipeWire.
+	if allowAudio {
+		args = append(args, audioSocketArgs(userRunDir, userRunDirCreated, debug)...)
 	}
 
 	return args
@@ -524,7 +585,7 @@ func dbusIsolationArgs(dbusBridge *DbusBridge, debug bool) []string {
 // Instead of bind-mounting the host's /run (which exposes dangerous sockets like
 // Docker, Podman, containerd, libvirt), we start with an empty tmpfs and
 // selectively mount only what's needed.
-func runIsolationArgs(dbusBridge *DbusBridge, debug bool) []string {
+func runIsolationArgs(dbusBridge *DbusBridge, allowAudio bool, debug bool) []string {
 	args := []string{"--tmpfs", "/run"}
 
 	// If /etc/resolv.conf is a symlink into /run (e.g., systemd-resolved
@@ -548,14 +609,22 @@ func runIsolationArgs(dbusBridge *DbusBridge, debug bool) []string {
 	uid := os.Getuid()
 	userRunDir := fmt.Sprintf("/run/user/%d", uid)
 
+	userRunDirCreated := false
 	if dbusBridge != nil {
 		args = append(args, "--dir", userRunDir)
+		userRunDirCreated = true
 		args = append(args, "--bind", dbusBridge.SocketPath, filepath.Join(userRunDir, "bus"))
 		if debug {
 			fmt.Fprintf(os.Stderr, "[greywall:linux] /run isolated (tmpfs); D-Bus session bus filtered (only org.freedesktop.Notifications allowed)\n")
 		}
 	} else if debug {
 		fmt.Fprintf(os.Stderr, "[greywall:linux] /run isolated (tmpfs); D-Bus session bus blocked\n")
+	}
+
+	// Re-expose audio sockets only when explicitly opted in (allowAudio: true).
+	// These sockets also allow microphone capture and screen access via PipeWire.
+	if allowAudio {
+		args = append(args, audioSocketArgs(userRunDir, userRunDirCreated, debug)...)
 	}
 
 	return args
@@ -769,7 +838,7 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 	// Mounting all of /run exposes dangerous host sockets (Docker, Podman,
 	// containerd, libvirt, etc.) that allow sandbox escape even when
 	// read-only, since Unix socket connections bypass filesystem write checks.
-	args = append(args, runIsolationArgs(dbusBridge, debug)...)
+	args = append(args, runIsolationArgs(dbusBridge, cfg != nil && cfg.AllowAudio, debug)...)
 
 	// /sys needs to be accessible for system info
 	if fileExists("/sys") && canMountOver("/sys") {
@@ -1039,7 +1108,7 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		// Block D-Bus session bus even in learning mode to prevent sandbox escape
 		// via GVFS/gnome-keyring. dconf and Wayland still work since they use
 		// their own sockets, not the D-Bus session bus.
-		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.Debug)...)
+		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.AllowAudio, opts.Debug)...)
 
 	}
 
@@ -1058,7 +1127,7 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		// Legacy mode: bind entire root filesystem read-only
 		bwrapArgs = append(bwrapArgs, "--ro-bind", "/", "/")
 		// Block D-Bus session bus to prevent sandbox escape via GVFS/gnome-keyring
-		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.Debug)...)
+		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.AllowAudio, opts.Debug)...)
 	}
 
 	// Mount special filesystems
@@ -1339,9 +1408,14 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 
 	innerScript.WriteString("export GREYWALL_SANDBOX=1\n")
 
-	// Set NODE_EXTRA_CA_CERTS so Node.js apps trust the greyproxy MITM CA certificate
+	// Set CA cert env vars so sandboxed apps trust the greyproxy MITM CA certificate.
+	// NODE_EXTRA_CA_CERTS: Node.js uses its own compiled-in CA bundle and ignores the OS keychain.
+	// SSL_CERT_FILE: Used by OpenSSL-based tools (Python, Ruby, curl, wget, Go, etc.).
+	// REQUESTS_CA_BUNDLE: Used by Python requests/httpx/aider and other Python HTTP clients.
 	if caCertPath != "" {
 		fmt.Fprintf(&innerScript, "export NODE_EXTRA_CA_CERTS=%s\n", ShellQuoteSingle(caCertPath))
+		fmt.Fprintf(&innerScript, "export SSL_CERT_FILE=%s\n", ShellQuoteSingle(caCertPath))
+		fmt.Fprintf(&innerScript, "export REQUESTS_CA_BUNDLE=%s\n", ShellQuoteSingle(caCertPath))
 	}
 
 	if proxyBridge != nil && tun2socksPath != "" && features.CanUseTransparentProxy() {

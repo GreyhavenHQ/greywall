@@ -18,6 +18,12 @@ func init() {
 				)
 			}
 			return &config.Config{
+				Network: config.NetworkConfig{
+					Rules: []config.NetworkRule{
+						{Destination: "generativelanguage.googleapis.com", Port: "443", Action: "allow"},
+						{Destination: "play.googleapis.com", Port: "443", Action: "allow"},
+					},
+				},
 				Filesystem: config.FilesystemConfig{
 					AllowRead:  allowRead,
 					AllowWrite: []string{"~/.gemini", "~/.cache/gemini"},

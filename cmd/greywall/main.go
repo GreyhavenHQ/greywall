@@ -45,12 +45,15 @@ var (
 	linuxFeatures          bool
 	learning               bool
 	profileName            string
+	noNetworkRules         bool
 	autoProfile            bool
 	noCredentialProtection bool
 	injectLabels           []string
 	secretVars             []string
 	ignoreVars             []string
 	skipVersionCheck       bool
+	allowDests             []string
+	blankProfile           bool
 )
 
 func main() {
@@ -102,7 +105,8 @@ Configuration file format:
   },
   "command": {
     "deny": ["git push", "npm publish"]
-  }
+  },
+  "allowAudio": true
 }`,
 		RunE:          runCommand,
 		SilenceUsage:  true,
@@ -123,6 +127,7 @@ Configuration file format:
 	rootCmd.Flags().BoolVar(&linuxFeatures, "linux-features", false, "Show available Linux security features and exit")
 	rootCmd.Flags().BoolVar(&learning, "learning", false, "Run in learning mode: trace filesystem access and generate a config profile")
 	rootCmd.Flags().StringVar(&profileName, "profile", "", "Load profiles by name, comma-separated (e.g. --profile claude,uv)")
+	rootCmd.Flags().BoolVar(&noNetworkRules, "no-network-rules", false, "Skip applying profile network rules to greyproxy (filesystem + keyring still apply)")
 	rootCmd.Flags().BoolVar(&autoProfile, "auto-profile", false, "Use saved or built-in profile without prompting")
 	rootCmd.Flags().BoolVar(&noCredentialProtection, "no-credential-protection", false, "Disable credential substitution (real credentials visible in sandbox)")
 	rootCmd.Flags().StringArrayVar(&injectLabels, "inject", nil, "Inject a global credential by label (can be used multiple times, e.g. --inject ANTHROPIC_API_KEY)")
@@ -130,6 +135,8 @@ Configuration file format:
 	rootCmd.Flags().StringArrayVar(&ignoreVars, "ignore-secret", nil, "Exclude an env var from credential detection (can be used multiple times)")
 	rootCmd.Flags().BoolVar(&skipVersionCheck, "skip-version-check", false, "Skip greyproxy version check (for testing)")
 	_ = rootCmd.Flags().MarkHidden("skip-version-check")
+	rootCmd.Flags().StringArrayVar(&allowDests, "allow", nil, "Allow a network destination for this session (e.g. --allow api.example.com:443)")
+	rootCmd.Flags().BoolVar(&blankProfile, "blank", false, "With --learning, skip default profile network rules (start from scratch)")
 
 	// Hidden aliases for backwards compatibility
 	rootCmd.Flags().StringVar(&profileName, "template", "", "Alias for --profile (deprecated)")
@@ -150,6 +157,9 @@ Configuration file format:
 }
 
 func runCommand(cmd *cobra.Command, args []string) error {
+	// Record greywall version for profile stamping and drift detection.
+	sandbox.SetGreywallVersion(version)
+
 	if showVersion {
 		fmt.Printf("greywall - lightweight, container-free sandbox for running untrusted commands\n")
 		fmt.Printf("  Version: %s\n", version)
@@ -231,8 +241,9 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// Extract command name for profile lookup
 	cmdName := extractCommandName(args, cmdString)
 
-	// Load profiles (when NOT in learning mode)
-	if !learning {
+	// Load profiles. In learning mode with --blank, skip profile loading entirely.
+	// In learning mode without --blank, load profiles for network rules only.
+	if !learning || !blankProfile {
 		if profileName != "" {
 			// Explicit --profile flag: resolve each comma-separated name
 			names := strings.Split(profileName, ",")
@@ -259,6 +270,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to load saved profile: %v\n", loadErr)
 				}
 			case savedCfg != nil:
+				savedCfg = maybeResolveDrift(savedCfg, cmdName)
 				cfg = config.Merge(cfg, savedCfg)
 				if debug {
 					fmt.Fprintf(os.Stderr, "[greywall] Auto-loaded saved profile for %q\n", cmdName)
@@ -405,6 +417,59 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build session network rules from profile config + --allow CLI flags.
+	// --no-network-rules suppresses profile-sourced rules; CLI --allow still applies.
+	var sessionNetworkRules []sandbox.NetworkRuleInput
+	defaultNote := "greywall profile"
+	if cmdName != "" {
+		defaultNote = "greywall profile: " + cmdName
+	}
+	if noNetworkRules {
+		if debug && len(cfg.Network.Rules) > 0 {
+			fmt.Fprintf(os.Stderr, "[greywall] --no-network-rules: dropping %d profile rule(s)\n", len(cfg.Network.Rules))
+		}
+	} else {
+		for _, r := range cfg.Network.Rules {
+			port := r.Port
+			if port == "" {
+				port = "*"
+			}
+			action := r.Action
+			if action == "" {
+				action = "allow"
+			}
+			notes := r.Notes
+			if notes == "" {
+				notes = defaultNote
+			}
+			sessionNetworkRules = append(sessionNetworkRules, sandbox.NetworkRuleInput{
+				DestinationPattern: r.Destination,
+				PortPattern:        port,
+				Action:             action,
+				Notes:              notes,
+			})
+		}
+	}
+	for _, dest := range allowDests {
+		// Parse "host:port" or just "host"
+		host, port := dest, "*"
+		if idx := strings.LastIndex(dest, ":"); idx > 0 {
+			host = dest[:idx]
+			port = dest[idx+1:]
+		}
+		sessionNetworkRules = append(sessionNetworkRules, sandbox.NetworkRuleInput{
+			DestinationPattern: host,
+			PortPattern:        port,
+			Action:             "allow",
+			Notes:              "CLI --allow flag",
+		})
+	}
+
+	sessionOpts := &sandbox.RegisterSessionOptions{
+		NetworkRules: sessionNetworkRules,
+		AllowAll:     learning,
+	}
+
 	// Credential substitution: detect credentials, rewrite .env files, register
 	// with greyproxy, and substitute env vars. This must happen before WrapCommand
 	// so that rewritten .env files are available for bind-mounting into the sandbox.
@@ -480,12 +545,12 @@ func runCommand(cmd *cobra.Command, args []string) error {
 				}
 
 				// Register ALL mappings (env + file) with the proxy in one call.
-				regResult, err := sandbox.RegisterSession(sessionID, containerName, allMappings, injectLabels, meta, "")
+				regResult, err := sandbox.RegisterSession(sessionID, containerName, allMappings, injectLabels, meta, "", sessionOpts)
 				if err != nil {
 					if debug {
 						fmt.Fprintf(os.Stderr, "[greywall:cred] failed to register session: %v (credentials will be visible)\n", err)
 					}
-					credMappings = nil
+					// credMappings is still nil from declaration; nothing to clear.
 					// Clean up rewritten files since we can't register them.
 					sandbox.CleanupRewrittenFiles(rewrittenEnvFiles)
 					rewrittenEnvFiles = nil
@@ -512,7 +577,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 					// for the same key name (e.g., .env has KEY=val1 while
 					// the env var has KEY=val2).
 					hardenedEnv = sandbox.SubstituteEnv(hardenedEnv, envMappings)
-					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, allMappings, injectLabels, meta, "", debug)
+					stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, allMappings, injectLabels, meta, "", sessionOpts, debug)
 					credSubstitutionActive = true
 					manager.SetRewrittenEnvFiles(rewrittenEnvFiles)
 
@@ -535,6 +600,49 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// If we have network rules or allow_all but didn't register a session yet
+	// (e.g., learning mode, or no credentials detected), register a session now.
+	if credSessionID == "" && (len(sessionNetworkRules) > 0 || learning) {
+		sessionID, err := sandbox.GenerateSessionID()
+		if err == nil {
+			credSessionID = sessionID
+			containerName := cmdName
+			if containerName == "" {
+				containerName = "sandbox"
+			}
+			cwd, _ := os.Getwd()
+			meta := &sandbox.SessionMetadata{
+				WorkDir: cwd,
+				Cmd:     cmdName,
+				PID:     strconv.Itoa(os.Getpid()),
+			}
+
+			regResult, err := sandbox.RegisterSession(sessionID, containerName, nil, nil, meta, "", sessionOpts)
+			if err != nil {
+				if debug {
+					fmt.Fprintf(os.Stderr, "[greywall] failed to register network rules session: %v\n", err)
+				}
+			} else {
+				if regResult.RulesCreated > 0 && debug {
+					fmt.Fprintf(os.Stderr, "[greywall] Network rules applied: %d rules from profile\n", regResult.RulesCreated)
+				}
+				if learning {
+					fmt.Fprintf(os.Stderr, "[greywall] Learning mode: all network traffic allowed for this session\n")
+				}
+				stopHeartbeat = sandbox.StartHeartbeatLoop(sessionID, containerName, nil, nil, meta, "", sessionOpts, debug)
+			}
+		}
+	} else if credSubstitutionActive && len(sessionNetworkRules) > 0 {
+		// Session was already registered with credentials; log rule count.
+		ruleCount := 0
+		for range sessionNetworkRules {
+			ruleCount++
+		}
+		if ruleCount > 0 && debug {
+			fmt.Fprintf(os.Stderr, "[greywall] Network rules applied: %d rules from profile\n", ruleCount)
+		}
+	}
+
 	// Warn if .env files will be masked because credential substitution is not active.
 	if !credSubstitutionActive && !learning {
 		cwd, _ := os.Getwd()
@@ -546,7 +654,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		if stopHeartbeat != nil {
 			stopHeartbeat()
 		}
-		if credSessionID != "" && len(credMappings) > 0 {
+		if credSessionID != "" {
 			_ = sandbox.DeleteSession(credSessionID, "")
 		}
 		sandbox.CleanupRewrittenFiles(rewrittenEnvFiles)
@@ -672,6 +780,34 @@ func runCommand(cmd *cobra.Command, args []string) error {
 // resolveProfile resolves a single profile name to a config.
 // It tries a saved profile first, then falls back to a built-in profile.
 // Returns an error if the name can't be resolved at all.
+// maybeResolveDrift detects whether savedCfg is drifted from the bundled
+// profile for the given name and, if so, prompts the user (TTY only) and
+// applies their choice. Returns the effective config to use.
+func maybeResolveDrift(savedCfg *config.Config, name string) *config.Config {
+	canonical := profiles.IsKnownAgent(name)
+	if canonical == "" {
+		return savedCfg
+	}
+	bundled := profiles.GetAgentProfile(canonical)
+	if bundled == nil {
+		return savedCfg
+	}
+	drift := profiles.DetectDrift(savedCfg, bundled, version, name)
+	if !drift.HasDrift {
+		return savedCfg
+	}
+	action := profiles.PromptDriftResolution(drift, savedCfg, bundled)
+	resolved, err := profiles.ApplyDriftAction(action, savedCfg, bundled, name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[greywall] Warning: failed to apply drift action: %v\n", err)
+		return savedCfg
+	}
+	if resolved == nil {
+		return savedCfg
+	}
+	return resolved
+}
+
 func resolveProfile(name string, debug bool) (*config.Config, error) {
 	// Try saved profile first
 	savedPath := sandbox.LearnedTemplatePath(name)
@@ -682,6 +818,7 @@ func resolveProfile(name string, debug bool) (*config.Config, error) {
 		}
 	}
 	if savedCfg != nil {
+		savedCfg = maybeResolveDrift(savedCfg, name)
 		if debug {
 			fmt.Fprintf(os.Stderr, "[greywall] Loaded saved profile for %q\n", name)
 		}
@@ -1096,7 +1233,7 @@ profiles, first save a copy with --learning or copy the output of "profiles show
 					}
 					switch strings.ToLower(strings.TrimSpace(choice)) {
 					case "d", "discard":
-						if writeErr := os.WriteFile(profilePath, originalData, 0o600); writeErr != nil {
+						if writeErr := os.WriteFile(profilePath, originalData, 0o600); writeErr != nil { //nolint:gosec // user-specified profile path - intentional
 							return fmt.Errorf("failed to restore original profile: %w", writeErr)
 						}
 						fmt.Println("Changes discarded.")

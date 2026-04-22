@@ -245,15 +245,25 @@ func SubstituteEnv(env []string, mappings []CredentialMapping) []string {
 	return result
 }
 
+// NetworkRuleInput is a network rule to send to greyproxy as part of session creation.
+type NetworkRuleInput struct {
+	DestinationPattern string `json:"destination_pattern"`
+	PortPattern        string `json:"port_pattern,omitempty"`
+	Action             string `json:"action,omitempty"`
+	Notes              string `json:"notes,omitempty"`
+}
+
 // sessionRequest is the JSON body for POST /api/sessions.
 type sessionRequest struct {
-	SessionID         string            `json:"session_id"`
-	ContainerName     string            `json:"container_name"`
-	Mappings          map[string]string `json:"mappings,omitempty"`
-	Labels            map[string]string `json:"labels,omitempty"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
-	GlobalCredentials []string          `json:"global_credentials,omitempty"`
-	TTLSeconds        int               `json:"ttl_seconds"`
+	SessionID         string             `json:"session_id"`
+	ContainerName     string             `json:"container_name"`
+	Mappings          map[string]string  `json:"mappings,omitempty"`
+	Labels            map[string]string  `json:"labels,omitempty"`
+	Metadata          map[string]string  `json:"metadata,omitempty"`
+	GlobalCredentials []string           `json:"global_credentials,omitempty"`
+	TTLSeconds        int                `json:"ttl_seconds"`
+	NetworkRules      []NetworkRuleInput `json:"network_rules,omitempty"`
+	AllowAll          bool               `json:"allow_all,omitempty"`
 }
 
 // SessionMetadata holds context about the sandboxed process for dashboard display.
@@ -270,6 +280,7 @@ type sessionResponse struct {
 	SessionID         string            `json:"session_id"`
 	ExpiresAt         string            `json:"expires_at"`
 	CredentialCount   int               `json:"credential_count"`
+	RulesCreated      int               `json:"rules_created"`
 	GlobalCredentials map[string]string `json:"global_credentials,omitempty"` // label -> placeholder
 }
 
@@ -277,13 +288,22 @@ type sessionResponse struct {
 type RegisterSessionResult struct {
 	// GlobalCredentials maps label -> placeholder for resolved global credentials.
 	GlobalCredentials map[string]string
+	// RulesCreated is the number of network rules created for this session.
+	RulesCreated int
+}
+
+// RegisterSessionOptions holds optional parameters for session registration.
+type RegisterSessionOptions struct {
+	NetworkRules []NetworkRuleInput
+	AllowAll     bool
 }
 
 // RegisterSession registers credential mappings with greyproxy.
 // globalCredLabels is an optional list of global credential labels to resolve.
 // metadata is optional context about the sandboxed process (for dashboard display).
+// opts is optional session options (network rules, allow_all).
 // Returns the resolved global credential placeholders (label -> placeholder).
-func RegisterSession(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, metadata *SessionMetadata, apiBase string) (*RegisterSessionResult, error) {
+func RegisterSession(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, metadata *SessionMetadata, apiBase string, opts *RegisterSessionOptions) (*RegisterSessionResult, error) {
 	if apiBase == "" {
 		apiBase = greyproxyAPIBase
 	}
@@ -328,6 +348,10 @@ func RegisterSession(sessionID, containerName string, mappings []CredentialMappi
 		GlobalCredentials: globalCredLabels,
 		TTLSeconds:        defaultSessionTTL,
 	}
+	if opts != nil {
+		body.NetworkRules = opts.NetworkRules
+		body.AllowAll = opts.AllowAll
+	}
 
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -352,6 +376,7 @@ func RegisterSession(sessionID, containerName string, mappings []CredentialMappi
 
 	return &RegisterSessionResult{
 		GlobalCredentials: sessResp.GlobalCredentials,
+		RulesCreated:      sessResp.RulesCreated,
 	}, nil
 }
 
@@ -397,7 +422,7 @@ func DeleteSession(sessionID, apiBase string) error {
 // StartHeartbeatLoop starts a goroutine that sends heartbeats every interval.
 // It re-registers the session if heartbeat returns 404.
 // Returns a stop function.
-func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, metadata *SessionMetadata, apiBase string, debug bool) func() {
+func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMapping, globalCredLabels []string, metadata *SessionMetadata, apiBase string, opts *RegisterSessionOptions, debug bool) func() {
 	stop := make(chan struct{})
 
 	go func() {
@@ -415,7 +440,7 @@ func StartHeartbeatLoop(sessionID, containerName string, mappings []CredentialMa
 						fmt.Fprintf(os.Stderr, "[greywall:cred] heartbeat failed: %v, re-registering\n", err)
 					}
 					// Re-register on failure (session may have expired or proxy restarted)
-					if _, regErr := RegisterSession(sessionID, containerName, mappings, globalCredLabels, metadata, apiBase); regErr != nil {
+					if _, regErr := RegisterSession(sessionID, containerName, mappings, globalCredLabels, metadata, apiBase, opts); regErr != nil {
 						if debug {
 							fmt.Fprintf(os.Stderr, "[greywall:cred] re-register failed: %v\n", regErr)
 						}

@@ -39,6 +39,19 @@ func init() {
 				)
 			}
 			return &config.Config{
+				Network: config.NetworkConfig{
+					Rules: []config.NetworkRule{
+						{Destination: "api.anthropic.com", Port: "443", Action: "allow"},
+						{Destination: "mcp-proxy.anthropic.com", Port: "443", Action: "allow"},
+						{Destination: "downloads.claude.ai", Port: "443", Action: "allow"},
+						{Destination: "platform.claude.com", Port: "443", Action: "allow"},
+						{Destination: "github.com", Port: "443", Action: "allow"},
+						{Destination: "api.github.com", Port: "443", Action: "allow"},
+						{Destination: "*.githubusercontent.com", Port: "443", Action: "allow"},
+						{Destination: "registry.npmjs.org", Port: "443", Action: "allow"},
+						{Destination: "storage.googleapis.com", Port: "443", Action: "allow"},
+					},
+				},
 				Filesystem: config.FilesystemConfig{
 					AllowRead:  allowRead,
 					AllowWrite: allowWrite,

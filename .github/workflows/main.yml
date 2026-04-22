@@ -48,10 +48,14 @@ jobs:
       - name: Download tun2socks for embedding
         run: make download-tun2socks
 
+      - name: Install lint tools
+        run: make install-lint-tools
+
+      - name: Check formatting
+        run: make fmt-check
+
       - name: Lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.10.1
+        run: make lint
 
   test-linux:
     name: Test (Linux)
