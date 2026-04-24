@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"fmt"
+	"os"
 	"runtime"
 
 	"github.com/GreyhavenHQ/greywall/internal/config"
@@ -37,6 +39,12 @@ func init() {
 					"/Library/Application Support/ClaudeCode/managed-mcp.json",
 					"/Library/Application Support/ClaudeCode/CLAUDE.md",
 				)
+				// Claude Code creates its bash working-directory under
+				// /private/tmp/claude-{uid}/ regardless of $TMPDIR.
+				uid := os.Getuid()
+				claudeTmp := fmt.Sprintf("/private/tmp/claude-%d", uid)
+				allowRead = append(allowRead, claudeTmp, "/tmp/claude-"+fmt.Sprint(uid))
+				allowWrite = append(allowWrite, claudeTmp, "/tmp/claude-"+fmt.Sprint(uid))
 			}
 			return &config.Config{
 				Network: config.NetworkConfig{
