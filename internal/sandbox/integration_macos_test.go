@@ -144,23 +144,21 @@ func TestMacOS_SeatbeltBlocksWriteSystemFiles(t *testing.T) {
 	assertFileNotExists(t, "/etc/greywall-test-file")
 }
 
-// TestMacOS_SeatbeltAllowsTmpGreywall verifies /tmp/greywall is writable.
-func TestMacOS_SeatbeltAllowsTmpGreywall(t *testing.T) {
+// TestMacOS_SeatbeltAllowsPerSessionTmpDir verifies that the per-session TMPDIR
+// created by Manager.Initialize is writable inside the sandbox.
+func TestMacOS_SeatbeltAllowsPerSessionTmpDir(t *testing.T) {
 	skipIfAlreadySandboxed(t)
 
 	workspace := createTempWorkspace(t)
 	cfg := testConfigWithWorkspace(workspace)
 
-	// Ensure /tmp/greywall exists
-	_ = os.MkdirAll("/tmp/greywall", 0o750)
-
-	testFile := "/tmp/greywall/test-file-" + filepath.Base(workspace)
-	defer func() { _ = os.Remove(testFile) }()
-
-	result := runUnderSandbox(t, cfg, "echo 'test' > "+testFile, workspace)
+	// Write to $TMPDIR/test-file and verify it succeeds.
+	// The manager injects TMPDIR pointing to the per-session dir, so
+	// $TMPDIR resolves to a path the sandbox allows.
+	result := runUnderSandbox(t, cfg, "echo 'test' > $TMPDIR/greywall-sandbox-test && cat $TMPDIR/greywall-sandbox-test", workspace)
 
 	assertAllowed(t, result)
-	assertFileExists(t, testFile)
+	assertContains(t, result.Stdout, "test")
 }
 
 // ============================================================================

@@ -669,11 +669,15 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 }
 
 // WrapCommandMacOS wraps a command with macOS sandbox restrictions.
-func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, rewrittenEnvFiles map[string]string, debug bool) (string, error) {
+// tmpDir is the per-session temp directory to set as TMPDIR; if empty, TMPDIR is not overridden.
+func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, rewrittenEnvFiles map[string]string, tmpDir string, debug bool) (string, error) {
 	cwd, _ := os.Getwd()
 
-	// Build allow paths: default + configured
+	// Build allow paths: default + configured + per-session tmpdir
 	allowPaths := append(GetDefaultWritePaths(), cfg.Filesystem.AllowWrite...)
+	if tmpDir != "" {
+		allowPaths = append(allowPaths, tmpDir)
+	}
 
 	// Expand /tmp <-> /private/tmp for macOS symlink compatibility
 	allowPaths = expandMacOSTmpPaths(allowPaths)
@@ -760,7 +764,7 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, re
 		return "", fmt.Errorf("shell %q not found: %w", shell, err)
 	}
 
-	proxyEnvs := GenerateProxyEnvVars(cfg.Network.ProxyURL, cfg.Network.HTTPProxyURL)
+	proxyEnvs := GenerateProxyEnvVars(cfg.Network.ProxyURL, cfg.Network.HTTPProxyURL, tmpDir)
 
 	// Build the command
 	// env VAR1=val1 VAR2=val2 sandbox-exec -p 'profile' shell -c 'command'

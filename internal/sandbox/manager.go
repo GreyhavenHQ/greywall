@@ -31,6 +31,7 @@ type Manager struct {
 	esloggerLogPath   string            // temp file for eslogger output (macOS)
 	esloggerCmd       *exec.Cmd         // eslogger subprocess (macOS)
 	rewrittenEnvFiles map[string]string // original path -> temp path with credential placeholders
+	macOSTmpDir       string            // per-session TMPDIR created on macOS (cleaned up on exit)
 }
 
 // NewManager creates a new sandbox manager.
@@ -215,6 +216,19 @@ func (m *Manager) Initialize() error {
 		m.dbusBridge = NewDbusBridge(m.debug)
 	}
 
+	// On macOS (non-learning), create a per-session temp directory and expose it
+	// as TMPDIR inside the sandbox. This avoids the need to allow arbitrary writes
+	// to /private/tmp, while giving sandboxed processes a working temp directory.
+	if platform.Detect() == platform.MacOS && !m.learning {
+		tmpDir, err := os.MkdirTemp("", "greywall-")
+		if err != nil {
+			m.logDebug("warning: failed to create per-session TMPDIR: %v", err)
+		} else {
+			m.macOSTmpDir = tmpDir
+			m.logDebug("Created per-session TMPDIR: %s", tmpDir)
+		}
+	}
+
 	m.initialized = true
 	if m.config.Network.ProxyURL != "" {
 		dnsInfo := "none"
@@ -249,7 +263,7 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 			// In learning mode, run command directly (no sandbox-exec wrapping)
 			return command, nil
 		}
-		return WrapCommandMacOS(m.config, command, m.exposedPorts, m.rewrittenEnvFiles, m.debug)
+		return WrapCommandMacOS(m.config, command, m.exposedPorts, m.rewrittenEnvFiles, m.macOSTmpDir, m.debug)
 	case platform.Linux:
 		if m.learning {
 			return m.wrapCommandLearning(command)
@@ -337,6 +351,10 @@ func (m *Manager) Cleanup() {
 	if m.esloggerLogPath != "" {
 		_ = os.Remove(m.esloggerLogPath)
 		m.esloggerLogPath = ""
+	}
+	if m.macOSTmpDir != "" {
+		_ = os.RemoveAll(m.macOSTmpDir)
+		m.macOSTmpDir = ""
 	}
 	m.logDebug("Sandbox manager cleaned up")
 }
