@@ -342,6 +342,12 @@ func (l *LandlockRuleset) AllowWrite(path string) error {
 		access |= LANDLOCK_ACCESS_FS_TRUNCATE
 	}
 
+	// Add IOCTL_DEV for ABI v5+ so interactive TUI programs can put
+	// terminals/PTYs into raw mode (TCGETS/TCSETS on /dev/tty, /dev/pts/*).
+	if l.abiVersion >= 5 {
+		access |= LANDLOCK_ACCESS_FS_IOCTL_DEV
+	}
+
 	return l.addPathRule(path, access)
 }
 
