@@ -639,6 +639,16 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// resolveToolPath resolves only the directory component so multi-call binaries
+// (e.g. coreutils: sleep -> coreutils) still dispatch correctly via argv[0].
+func resolveToolPath(p string) string {
+	dir := filepath.Dir(p)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Join(resolved, filepath.Base(p))
+	}
+	return p
+}
+
 // isDirectory returns true if the path exists and is a directory.
 func isDirectory(path string) bool {
 	info, err := os.Stat(path)
@@ -807,7 +817,8 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 	// /bin, /sbin, /lib, /lib64 are often symlinks to /usr/*. We must
 	// recreate these as symlinks via --symlink so the dynamic linker
 	// and shell can be found. Real directories get bind-mounted.
-	systemPaths := []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt"}
+	// /nix is included for NixOS where all binaries live under /nix/store.
+	systemPaths := []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/nix"}
 	for _, p := range systemPaths {
 		if !fileExists(p) {
 			continue
@@ -1085,6 +1096,14 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	shellPath, err := exec.LookPath(shell)
 	if err != nil {
 		return "", fmt.Errorf("shell %q not found: %w", shell, err)
+	}
+	shellPath = resolveToolPath(shellPath)
+
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		sleepPath = "sleep" // fallback to PATH lookup inside sandbox
+	} else {
+		sleepPath = resolveToolPath(sleepPath)
 	}
 
 	cwd, _ := os.Getwd()
@@ -1542,7 +1561,7 @@ export no_proxy=localhost,127.0.0.1
 	}
 
 	// Add cleanup function
-	innerScript.WriteString(`
+	fmt.Fprintf(&innerScript, `
 # Cleanup function
 cleanup() {
     jobs -p | xargs -r kill 2>/dev/null
@@ -1550,10 +1569,10 @@ cleanup() {
 trap cleanup EXIT
 
 # Small delay to ensure services are ready
-sleep 0.3
+%s 0.3
 
 # Run the user command
-`)
+`, ShellQuoteSingle(sleepPath))
 
 	// In learning mode, wrap the command with strace to trace syscalls.
 	// Run strace in the foreground so the traced command retains terminal
@@ -1571,10 +1590,10 @@ GREYWALL_STRACE_EXIT=$?
 # Kill any orphaned child processes (LSP servers, file watchers, etc.)
 # that were spawned by the traced command and reparented to PID 1.
 kill -TERM -1 2>/dev/null
-sleep 0.1
+%s 0.1
 exit $GREYWALL_STRACE_EXIT
 `,
-			ShellQuoteSingle(opts.StraceLogPath), command,
+			ShellQuoteSingle(opts.StraceLogPath), command, ShellQuoteSingle(sleepPath),
 		)
 	case useLandlockWrapper:
 		// Use Landlock wrapper if available

@@ -209,11 +209,17 @@ func (f *LinuxFeatures) detectNetworkNamespace() {
 		return
 	}
 
-	// Run a minimal bwrap command with --unshare-net to test if it works
-	// We use a very short timeout since this should either succeed or fail immediately
-	// The bind mount is required in some environments
-	cmd := exec.Command("bwrap", "--unshare-net", "--ro-bind", "/", "/", "--", "/bin/true")
-	err := cmd.Run()
+	// Run a minimal bwrap command with --unshare-net to test if it works.
+	// Resolve true from PATH instead of hardcoding /bin/true: distributions like
+	// NixOS do not provide /bin/true, and a missing probe binary should not be
+	// mistaken for unavailable network namespaces.
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		return
+	}
+
+	cmd := exec.Command("bwrap", "--unshare-net", "--ro-bind", "/", "/", "--", truePath)
+	err = cmd.Run()
 	f.CanUnshareNet = err == nil
 }
 

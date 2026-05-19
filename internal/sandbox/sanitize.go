@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -45,7 +46,44 @@ var DangerousEnvVars = []string{
 // agent writes a .so/.dylib and then uses LD_PRELOAD/DYLD_INSERT_LIBRARIES
 // in a subsequent command.
 func GetHardenedEnv() []string {
-	return FilterDangerousEnv(os.Environ())
+	env := FilterDangerousEnv(os.Environ())
+	if runtime.GOOS == "linux" {
+		env = resolvePathInEnv(env)
+	}
+	return env
+}
+
+// resolvePathInEnv rewrites the PATH entry in env so that each directory is
+// resolved to its real path via symlink evaluation. This is needed on NixOS
+// where PATH contains /run/current-system/sw/bin (a symlink chain into
+// /nix/store) which is unavailable inside the bwrap sandbox because /run is
+// replaced with a tmpfs.
+func resolvePathInEnv(env []string) []string {
+	result := make([]string, len(env))
+	for i, entry := range env {
+		if !strings.HasPrefix(entry, "PATH=") {
+			result[i] = entry
+			continue
+		}
+		value := entry[len("PATH="):]
+		dirs := strings.Split(value, string(filepath.ListSeparator))
+		seen := make(map[string]bool, len(dirs))
+		resolved := make([]string, 0, len(dirs))
+		for _, d := range dirs {
+			if d == "" {
+				continue
+			}
+			if r, err := filepath.EvalSymlinks(d); err == nil {
+				d = r
+			}
+			if !seen[d] {
+				seen[d] = true
+				resolved = append(resolved, d)
+			}
+		}
+		result[i] = "PATH=" + strings.Join(resolved, string(filepath.ListSeparator))
+	}
+	return result
 }
 
 // FilterDangerousEnv filters out dangerous environment variables from the given slice.

@@ -60,6 +60,7 @@ func ApplyLandlockFromConfig(cfg *config.Config, cwd string, socketPaths []strin
 		"/var/lib",
 		"/var/cache",
 		"/opt",
+		"/nix", // NixOS: all binaries and libraries live under /nix/store
 	}
 
 	for _, p := range systemReadPaths {
