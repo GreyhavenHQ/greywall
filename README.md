@@ -6,9 +6,12 @@
 [![Release](https://img.shields.io/github/v/release/GreyhavenHQ/greywall)](https://github.com/GreyhavenHQ/greywall/releases)
 [![Product Hunt](https://img.shields.io/badge/Product%20Hunt-Greywall-orange?logo=producthunt)](https://www.producthunt.com/products/greywall?launch=greywall)
 
-Greywall is a container-free, deny-by-default sandbox for AI agents on Linux and macOS. It restricts filesystem access, network connections, and system calls to only what you explicitly allow, so tools like Claude Code, Cursor, Codex, and other AI coding agents can't access your SSH keys, environment secrets, or anything outside the working directory.
+Greywall is a container-free sandbox for AI coding agents on Linux and macOS, with two complementary modes:
 
-Use `--learning` to trace what a command needs and auto-generate a least-privilege config profile. All network traffic is transparently redirected through [greyproxy](https://github.com/GreyhavenHQ/greyproxy), a deny-by-default transparent proxy with a live allow/deny dashboard.
+- **`greywall` — deny-by-default sandbox.** Restricts filesystem access, network connections, and system calls to only what you explicitly allow, so tools like Claude Code, Cursor, Codex, and other AI agents can't reach your SSH keys, secrets, or anything outside the working directory.
+- **`greywatch` — allow-by-default observability layer** (equivalent to `greywall --watch`). Skips profile loading, registers a `*/*` allow rule with greyproxy so every network request is accepted but logged on the dashboard, and runs with a permissive filesystem. Use it to see what a tool actually does before deciding what to lock down.
+
+Both modes route every network connection through [greyproxy](https://github.com/GreyhavenHQ/greyproxy) — a transparent proxy with a live allow/deny dashboard — so traffic stays visible whether you're enforcing or observing. Use `--learning` to trace what a command needs and auto-generate a least-privilege config profile.
 
 *Supports Linux and macOS. See [platform support](https://docs.greywall.io/greywall/platform-support) for details.*
 
@@ -21,6 +24,7 @@ https://github.com/user-attachments/assets/7d62d45d-a201-4f24-9138-b460e4c157a8
 - **Command blocking** — dangerous commands like `rm -rf /` and `git push --force` are denied
 - **Built-in agent profiles** — one-command setup for Claude Code, Cursor, Codex, Aider, Goose, Gemini, OpenCode, Amp, Cline, Copilot, and more
 - **Learning mode** — traces filesystem access and auto-generates least-privilege profiles
+- **Observability mode** — `greywatch` (or `greywall --watch`) runs commands with no profile and all network allowed, so the greyproxy dashboard shows exactly what an agent does without anything being denied
 - **Five security layers on Linux** — Bubblewrap namespaces, Landlock, Seccomp BPF, eBPF monitoring, TUN-based network capture
 - **No containers required** — kernel-enforced sandboxing without Docker overhead
 
@@ -30,6 +34,9 @@ greywall -- curl https://example.com
 
 # Sandbox an AI coding agent with a built-in profile
 greywall -- claude
+
+# Observe what an agent does without blocking anything (allow-by-default)
+greywatch -- claude
 
 # Learn what filesystem access a command needs, then auto-generate a profile
 greywall --learning -- opencode
@@ -55,6 +62,8 @@ This also installs [greyproxy](https://github.com/GreyhavenHQ/greyproxy) as a de
 curl -fsSL https://raw.githubusercontent.com/GreyhavenHQ/greywall/main/install.sh | sh
 ```
 
+Both `greywall` and the `greywatch` alias (observability mode) are installed by Homebrew, `install.sh`, and `make build`. `greywatch` is a symlink to the same binary — argv[0] dispatch enables `--watch` automatically.
+
 <details>
 <summary>Other installation methods</summary>
 
@@ -62,6 +71,8 @@ curl -fsSL https://raw.githubusercontent.com/GreyhavenHQ/greywall/main/install.s
 
 ```bash
 go install github.com/GreyhavenHQ/greywall/cmd/greywall@latest
+# Create the greywatch alias yourself (Go install ships a single binary):
+ln -s "$(go env GOPATH)/bin/greywall" "$(go env GOPATH)/bin/greywatch"
 ```
 
 **[mise](https://mise.jdx.dev/):**
@@ -71,12 +82,18 @@ mise use -g github:GreyhavenHQ/greywall
 mise use -g github:GreyhavenHQ/greyproxy
 ```
 
+**Manual tarball:** GitHub release tarballs contain only the `greywall` binary. After extracting, create the alias yourself:
+
+```bash
+ln -s greywall greywatch
+```
+
 **Build from source:**
 
 ```bash
 git clone https://github.com/GreyhavenHQ/greywall
 cd greywall
-make setup && make build
+make setup && make build   # creates ./greywall and ./greywatch symlink
 ```
 
 </details>
@@ -177,6 +194,33 @@ greywall profiles show opencode
 # Next run auto-loads the learned profile
 greywall -- opencode
 ```
+
+### Watch mode (observability)
+
+Watch mode flips the policy: no profile is loaded, every network request is accepted but logged on the greyproxy dashboard, and the local filesystem is permissive. Use it to *see* what a tool does before deciding what to restrict — the inverse of deny-by-default.
+
+```bash
+# Same thing, two entry points
+greywatch -- claude
+greywall --watch -- claude
+
+# Inspect what claude touches in the greyproxy dashboard:
+#   http://localhost:43080
+```
+
+What stays the same:
+
+- **Network traffic still goes through greyproxy.** On Linux, `--unshare-net` + tun2socks force it; on macOS, the Seatbelt profile blocks direct egress to anything except the proxy. The dashboard sees every request.
+- **Hard safety floor remains.** Mandatory denies (`~/.ssh/authorized_keys`, git hooks, etc.) still apply even with the permissive filesystem.
+- **Credential substitution stays on** by default (disable with `--no-credential-protection`).
+
+What changes vs. normal mode:
+
+- No profile is loaded — observability runs from a blank default config.
+- A single `*/*` allow rule is registered with greyproxy for the session, so nothing is denied.
+- Filesystem deny-by-default is off and the command deny list is disabled.
+
+`-m` (violation monitor) stays orthogonal — combine `--watch -m` if you want both.
 
 ### Configuration
 
