@@ -88,17 +88,11 @@ func (s *SeccompFilter) GenerateBPFFilter() (string, error) {
 	return filterPath, nil
 }
 
-// writeBPFProgram writes a BPF program that blocks dangerous syscalls.
-// This generates a compact BPF program in the format expected by bwrap --seccomp.
-func (s *SeccompFilter) writeBPFProgram(path string) error {
-	// For bwrap, we need to pass the seccomp filter via file descriptor
-	// The filter format is: struct sock_filter array
-	//
-	// We'll build a simple filter:
-	// 1. Load syscall number
-	// 2. For each dangerous syscall: if match, return ERRNO(EPERM) or LOG+ERRNO
-	// 3. Default: allow
-
+// generateBPFInstructions builds the BPF program that blocks dangerous syscalls
+// and returns it as an in-memory slice of sock_filter instructions. Used both by
+// writeBPFProgram (file format for bwrap --seccomp) and by ApplySeccompFilter
+// (direct SECCOMP_SET_MODE_FILTER load in --no-bwrap mode).
+func generateBPFInstructions() ([]bpfInstruction, error) {
 	// Get syscall numbers for the current architecture
 	syscallNums := make(map[string]int)
 	for _, name := range DangerousSyscalls {
@@ -109,7 +103,7 @@ func (s *SeccompFilter) writeBPFProgram(path string) error {
 
 	if len(syscallNums) == 0 {
 		// No syscalls to block (unknown architecture?)
-		return fmt.Errorf("no syscall numbers found for dangerous syscalls")
+		return nil, fmt.Errorf("no syscall numbers found for dangerous syscalls")
 	}
 
 	// Build BPF program
@@ -199,7 +193,17 @@ func (s *SeccompFilter) writeBPFProgram(path string) error {
 		k:    SECCOMP_RET_ALLOW,
 	})
 
-	// Write the program to file
+	return program, nil
+}
+
+// writeBPFProgram writes a BPF program that blocks dangerous syscalls.
+// This generates a compact BPF program in the format expected by bwrap --seccomp.
+func (s *SeccompFilter) writeBPFProgram(path string) error {
+	program, err := generateBPFInstructions()
+	if err != nil {
+		return err
+	}
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // path is controlled
 	if err != nil {
 		return err

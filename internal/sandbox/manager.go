@@ -24,6 +24,9 @@ type Manager struct {
 	monitor       bool
 	initialized   bool
 	learning      bool   // learning mode: permissive sandbox with strace/eslogger
+	noBwrap       bool   // --no-bwrap: skip bubblewrap, rely on Landlock + seccomp only
+	netnsPath     string // --netns: pre-built netns to enter (requires noBwrap)
+	netnsHelper   string // override path to greywall-netns-helper
 	straceLogPath string // host-side temp file for strace output (Linux)
 	commandName   string // name of the command being learned
 	// macOS learning mode fields
@@ -51,6 +54,27 @@ func (m *Manager) SetExposedPorts(ports []int) {
 // SetLearning enables or disables learning mode.
 func (m *Manager) SetLearning(enabled bool) {
 	m.learning = enabled
+}
+
+// SetNoBwrap enables --no-bwrap mode. When set, WrapCommand (Linux) skips
+// bubblewrap entirely and produces a command that applies Landlock + seccomp
+// directly via the --landlock-apply wrapper. Intended for nested-Docker
+// environments where bwrap fails on uid_map writes.
+func (m *Manager) SetNoBwrap(enabled bool) {
+	m.noBwrap = enabled
+}
+
+// IsNoBwrap returns whether --no-bwrap mode is active.
+func (m *Manager) IsNoBwrap() bool {
+	return m.noBwrap
+}
+
+// SetNetns points the --no-bwrap path at a pre-built netns (created by
+// greywall-netns-helper create). helperPath is optional; empty string means
+// look up greywall-netns-helper in $PATH.
+func (m *Manager) SetNetns(netnsPath, helperPath string) {
+	m.netnsPath = netnsPath
+	m.netnsHelper = helperPath
 }
 
 // SetCommandName sets the command name for learning mode profile generation.
@@ -137,8 +161,12 @@ func (m *Manager) Initialize() error {
 		return nil
 	}
 
-	// On Linux, set up proxy bridge and tun2socks if proxy is configured
-	if platform.Detect() == platform.Linux {
+	// On Linux, set up proxy bridge and tun2socks if proxy is configured.
+	// In --no-bwrap mode, we don't bind Unix sockets into a sandbox (no bwrap),
+	// and we don't set up a netns for tun2socks — the wrapped command relies on
+	// the env-var proxy injection in linux_nobwrap.go. Skip the bridges entirely
+	// so we don't require socat in environments that can't use bwrap anyway.
+	if platform.Detect() == platform.Linux && !m.noBwrap {
 		if m.config.Network.ProxyURL != "" {
 			// Extract embedded tun2socks binary
 			tun2socksPath, err := extractTun2Socks()
@@ -267,6 +295,9 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 	case platform.Linux:
 		if m.learning {
 			return m.wrapCommandLearning(command)
+		}
+		if m.noBwrap {
+			return WrapCommandLinuxNoBwrap(m.config, command, m.debug, m.netnsPath, m.netnsHelper)
 		}
 		return WrapCommandLinuxWithOptions(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.forwardBridge, m.dbusBridge, m.tun2socksPath, LinuxSandboxOptions{
 			UseLandlock:       true,
