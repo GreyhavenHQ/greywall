@@ -112,7 +112,13 @@ mkdir -p "$INSTALL_DIR"
 mv "$TMP/$BINARY" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/$BINARY"
 
-echo "Installed greywall $VERSION to $INSTALL_DIR"
+# Install the greywatch alias (same binary, dispatched via argv[0]).
+# Running "greywatch <cmd>" is equivalent to "greywall --watch -- <cmd>":
+# no profile, all network allowed and logged on the dashboard, permissive
+# filesystem — pure observability instead of deny-by-default.
+ln -sf "$BINARY" "$INSTALL_DIR/greywatch"
+
+echo "Installed greywall $VERSION to $INSTALL_DIR (with greywatch alias)"
 
 # Always install/update greyproxy
 echo ""

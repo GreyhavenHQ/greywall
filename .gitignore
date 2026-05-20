@@ -2,6 +2,8 @@
 /greywall
 /greywall_*
 /greywall-*
+/greywatch
+/greywatch_*
 
 # Tar archives
 *.tar.gz

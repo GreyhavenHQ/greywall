@@ -24,6 +24,7 @@ type Manager struct {
 	monitor       bool
 	initialized   bool
 	learning      bool   // learning mode: permissive sandbox with strace/eslogger
+	watch         bool   // watch mode: permissive sandbox for pure observability (no strace, no profile gen)
 	straceLogPath string // host-side temp file for strace output (Linux)
 	commandName   string // name of the command being learned
 	// macOS learning mode fields
@@ -60,6 +61,16 @@ func (m *Manager) SetCommandName(name string) {
 // IsLearning returns whether learning mode is enabled.
 func (m *Manager) IsLearning() bool {
 	return m.learning
+}
+
+// SetWatch enables or disables watch (observability) mode.
+func (m *Manager) SetWatch(enabled bool) {
+	m.watch = enabled
+}
+
+// IsWatch returns whether watch mode is enabled.
+func (m *Manager) IsWatch() bool {
+	return m.watch
 }
 
 // SetRewrittenEnvFiles sets the map of .env files rewritten with credential placeholders.
@@ -249,16 +260,21 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 			// In learning mode, run command directly (no sandbox-exec wrapping)
 			return command, nil
 		}
+		// Watch mode goes through the normal macOS path so the sandbox-exec
+		// wrapper still exports proxy env vars (HTTP_PROXY, ALL_PROXY, ...).
+		// The permissive overrides applied in main.go ensure the generated
+		// Seatbelt profile is wide-open for filesystem reads.
 		return WrapCommandMacOS(m.config, command, m.exposedPorts, m.rewrittenEnvFiles, m.debug)
 	case platform.Linux:
 		if m.learning {
 			return m.wrapCommandLearning(command)
 		}
 		return WrapCommandLinuxWithOptions(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.forwardBridge, m.dbusBridge, m.tun2socksPath, LinuxSandboxOptions{
-			UseLandlock:       true,
-			UseSeccomp:        true,
-			UseEBPF:           true,
+			UseLandlock:       !m.watch,
+			UseSeccomp:        !m.watch,
+			UseEBPF:           !m.watch,
 			Debug:             m.debug,
+			Watch:             m.watch,
 			RewrittenEnvFiles: m.rewrittenEnvFiles,
 			AllowAudio:        m.config != nil && m.config.AllowAudio,
 		})

@@ -62,6 +62,7 @@ type LinuxSandboxOptions struct {
 	Monitor           bool
 	Debug             bool
 	Learning          bool
+	Watch             bool
 	StraceLogPath     string
 	RewrittenEnvFiles map[string]string
 	AllowAudio        bool

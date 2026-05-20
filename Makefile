@@ -34,6 +34,7 @@ download-tun2socks:
 build: download-tun2socks
 	@echo "Building $(BINARY_NAME)..."
 	$(GOBUILD) -o $(BINARY_NAME) -v ./cmd/greywall
+	@ln -sf $(BINARY_NAME) greywatch
 
 build-ci: download-tun2socks
 	@echo "CI: Building $(BINARY_NAME) with version info..."
@@ -41,6 +42,7 @@ build-ci: download-tun2socks
 	$(eval BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ'))
 	$(eval GIT_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown"))
 	$(GOBUILD) -ldflags "-s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X main.gitCommit=$(GIT_COMMIT)" -o $(BINARY_NAME) -v ./cmd/greywall
+	@ln -sf $(BINARY_NAME) greywatch
 
 test:
 	@echo "Running tests..."
@@ -54,6 +56,7 @@ clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
 	rm -f $(BINARY_NAME)
+	rm -f greywatch
 	rm -f $(BINARY_UNIX)
 	rm -f coverage.out
 	rm -f $(TUN2SOCKS_BIN_DIR)/tun2socks-linux-*
@@ -66,10 +69,12 @@ deps:
 build-linux: download-tun2socks
 	@echo "Building for Linux..."
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -o $(BINARY_UNIX) -v ./cmd/greywall
+	@ln -sf $(BINARY_UNIX) greywatch_unix
 
 build-darwin:
 	@echo "Building for macOS..."
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -o $(BINARY_NAME)_darwin -v ./cmd/greywall
+	@ln -sf $(BINARY_NAME)_darwin greywatch_darwin
 
 install-lint-tools:
 	@echo "Installing linting tools..."

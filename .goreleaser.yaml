@@ -101,11 +101,14 @@ homebrew_casks:
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/greywall"]
           end
+          # greywatch is the same binary; argv[0] dispatch enables observe-only mode.
+          File.symlink("greywall", "#{staged_path}/greywatch") unless File.exist?("#{staged_path}/greywatch")
     dependencies:
       - cask: greyproxy
     caveats: |
       greyproxy is installed as a dependency and runs automatically.
       Dashboard: http://localhost:43080
+      Use "greywatch <cmd>" for observability-only mode (no profile, all network allowed).
 
 release:
   draft: false

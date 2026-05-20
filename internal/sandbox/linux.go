@@ -124,6 +124,10 @@ type LinuxSandboxOptions struct {
 	Debug bool
 	// Learning mode: permissive sandbox with strace tracing
 	Learning bool
+	// Watch mode: permissive sandbox for pure observability. Shares the
+	// permissive bind layout with Learning but does not bind a strace log or
+	// wrap the command with strace.
+	Watch bool
 	// Path to host-side strace log file (bind-mounted into sandbox)
 	StraceLogPath string
 	// RewrittenEnvFiles maps original .env file paths to temp files containing
@@ -1088,10 +1092,16 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		}
 	}
 
-	// Learning mode: permissive sandbox with home + cwd writable
-	if opts.Learning {
+	// Learning and watch modes share a permissive sandbox layout: root bound
+	// read-only, home + cwd writable, D-Bus isolated for safety. Learning
+	// additionally binds a strace log later; watch does not.
+	if opts.Learning || opts.Watch {
 		if opts.Debug {
-			fmt.Fprintf(os.Stderr, "[greywall:linux] Learning mode: binding root read-only, home + cwd writable\n")
+			modeName := "Learning"
+			if opts.Watch {
+				modeName = "Watch"
+			}
+			fmt.Fprintf(os.Stderr, "[greywall:linux] %s mode: binding root read-only, home + cwd writable\n", modeName)
 		}
 		// Bind entire root read-only as baseline
 		bwrapArgs = append(bwrapArgs, "--ro-bind", "/", "/")
@@ -1105,9 +1115,9 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 			bwrapArgs = append(bwrapArgs, "--bind", cwd, cwd)
 		}
 
-		// Block D-Bus session bus even in learning mode to prevent sandbox escape
-		// via GVFS/gnome-keyring. dconf and Wayland still work since they use
-		// their own sockets, not the D-Bus session bus.
+		// Block D-Bus session bus even in permissive modes to prevent sandbox
+		// escape via GVFS/gnome-keyring. dconf and Wayland still work since
+		// they use their own sockets, not the D-Bus session bus.
 		bwrapArgs = append(bwrapArgs, dbusIsolationArgs(dbusBridge, opts.AllowAudio, opts.Debug)...)
 
 	}
@@ -1115,8 +1125,8 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	defaultDenyRead := cfg != nil && cfg.Filesystem.IsDefaultDenyRead()
 
 	switch {
-	case opts.Learning:
-		// Skip defaultDenyRead logic in learning mode (already set up above)
+	case opts.Learning || opts.Watch:
+		// Skip defaultDenyRead logic in permissive modes (already set up above)
 	case defaultDenyRead:
 		// Deny-by-default mode: start with empty root, then whitelist system paths + CWD
 		if opts.Debug {
@@ -1157,9 +1167,9 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		}
 	}
 
-	// In learning mode, skip writable paths, deny rules, and mandatory deny
-	// (the sandbox is already permissive with home + cwd writable)
-	if !opts.Learning {
+	// In learning/watch modes, skip writable paths, deny rules, and mandatory
+	// deny (the sandbox is already permissive with home + cwd writable).
+	if !opts.Learning && !opts.Watch {
 
 		writablePaths := make(map[string]bool)
 
@@ -1278,7 +1288,7 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 			}
 		}
 
-	} // end if !opts.Learning
+	} // end if !opts.Learning && !opts.Watch
 
 	// Bind the proxy bridge Unix socket into the sandbox (needs to be writable)
 	var dnsRelayResolvConf string // temp file path for custom resolv.conf
@@ -1602,6 +1612,9 @@ exit $GREYWALL_STRACE_EXIT
 		}
 		if opts.Learning {
 			featureList = append(featureList, "learning(strace)")
+		}
+		if opts.Watch {
+			featureList = append(featureList, "watch(observe-only)")
 		}
 		fmt.Fprintf(os.Stderr, "[greywall:linux] Sandbox: %s\n", strings.Join(featureList, ", "))
 	}

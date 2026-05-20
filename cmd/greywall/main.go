@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -55,6 +56,7 @@ var (
 	skipVersionCheck       bool
 	allowDests             []string
 	blankProfile           bool
+	watch                  bool
 )
 
 func main() {
@@ -63,6 +65,12 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "--landlock-apply" {
 		runLandlockWrapper()
 		return
+	}
+
+	// When invoked as "greywatch", inject --watch as the first flag so users get
+	// observability-mode behaviour without needing to remember the flag.
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "greywatch" {
+		os.Args = append([]string{os.Args[0], "--watch"}, os.Args[1:]...)
 	}
 
 	rootCmd := &cobra.Command{
@@ -139,6 +147,7 @@ Configuration file format:
 	_ = rootCmd.Flags().MarkHidden("skip-version-check")
 	rootCmd.Flags().StringArrayVar(&allowDests, "allow", nil, "Allow a network destination for this session (e.g. --allow api.example.com:443)")
 	rootCmd.Flags().BoolVar(&blankProfile, "blank", false, "With --learning, skip default profile network rules (start from scratch)")
+	rootCmd.Flags().BoolVar(&watch, "watch", false, "Watch mode: skip profile loading, allow all network (logged on dashboard), permissive filesystem — observability only, no deny-by-default")
 
 	// Hidden aliases for backwards compatibility
 	rootCmd.Flags().StringVar(&profileName, "template", "", "Alias for --profile (deprecated)")
@@ -243,9 +252,11 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	// Extract command name for profile lookup
 	cmdName := extractCommandName(args, cmdString)
 
-	// Load profiles. In learning mode with --blank, skip profile loading entirely.
+	// Load profiles. Watch mode never loads profiles — observability runs from a
+	// blank default config so no per-tool rules influence what's observed.
+	// In learning mode with --blank, skip profile loading entirely.
 	// In learning mode without --blank, load profiles for network rules only.
-	if !learning || !blankProfile {
+	if !watch && (!learning || !blankProfile) {
 		if profileName != "" {
 			// Explicit --profile flag: resolve each comma-separated name
 			names := strings.Split(profileName, ",")
@@ -379,6 +390,24 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		cfg.Network.ForwardPorts = append(cfg.Network.ForwardPorts, fwdPorts...)
 	}
 
+	// Watch mode overrides: relax local enforcement so greywall acts as an
+	// observability layer instead of a deny-by-default sandbox. Network is
+	// permitted via a session-scoped */* allow rule registered with greyproxy
+	// (see sessionNetworkRules below), so all traffic stays visible on the
+	// dashboard while reaching its destination.
+	if watch {
+		falseVal := false
+		cfg.Filesystem.DefaultDenyRead = &falseVal
+		cfg.Filesystem.DenyRead = nil
+		cfg.Filesystem.DenyWrite = nil
+		if !slices.Contains(cfg.Filesystem.AllowWrite, "/") {
+			cfg.Filesystem.AllowWrite = append(cfg.Filesystem.AllowWrite, "/")
+		}
+		cfg.Command.UseDefaults = &falseVal
+		cfg.Command.Deny = nil
+		fmt.Fprintf(os.Stderr, "[greywall] Watch mode: no profile, all network allowed (logged on dashboard), permissive filesystem\n")
+	}
+
 	// Learning mode setup
 	if learning {
 		if err := sandbox.CheckLearningAvailable(); err != nil {
@@ -393,6 +422,9 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	if learning {
 		manager.SetLearning(true)
 		manager.SetCommandName(cmdName)
+	}
+	if watch {
+		manager.SetWatch(true)
 	}
 	defer manager.Cleanup()
 
@@ -477,6 +509,18 @@ func runCommand(cmd *cobra.Command, args []string) error {
 			PortPattern:        port,
 			Action:             "allow",
 			Notes:              "CLI --allow flag",
+		})
+	}
+
+	// Watch mode: register a single match-all allow rule on greyproxy so the
+	// dashboard logs every request without blocking anything. Greyproxy's
+	// pattern matcher treats "*" as match-all for both destination and port.
+	if watch {
+		sessionNetworkRules = append(sessionNetworkRules, sandbox.NetworkRuleInput{
+			DestinationPattern: "*",
+			PortPattern:        "*",
+			Action:             "allow",
+			Notes:              "greywatch: observe-only",
 		})
 	}
 
@@ -616,8 +660,12 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// If we have network rules or allow_all but didn't register a session yet
-	// (e.g., learning mode, or no credentials detected), register a session now.
-	if credSessionID == "" && (len(sessionNetworkRules) > 0 || learning) {
+	// (e.g., learning/watch mode, or no credentials detected), register a
+	// session now. The credential block above may have generated a sessionID
+	// without registering it (when no credentials were detected), so we gate
+	// on credSubstitutionActive — which is the source of truth for whether
+	// registration actually happened.
+	if !credSubstitutionActive && (len(sessionNetworkRules) > 0 || learning) {
 		sessionID, err := sandbox.GenerateSessionID()
 		if err == nil {
 			credSessionID = sessionID
