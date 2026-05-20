@@ -4,6 +4,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -150,6 +151,7 @@ Configuration file format:
 	rootCmd.AddCommand(newProfilesCmd())
 	rootCmd.AddCommand(newCheckCmd())
 	rootCmd.AddCommand(newSetupCmd())
+	rootCmd.AddCommand(newUpdateCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -1028,6 +1030,173 @@ func runSetup(_ *cobra.Command, _ []string) error {
 	return proxy.Install(proxy.InstallOptions{
 		Output: os.Stderr,
 	})
+}
+
+// newUpdateCmd creates the update subcommand for updating greywall and greyproxy.
+func newUpdateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update greywall and greyproxy to the latest release",
+		Long: `Updates greywall and greyproxy by downloading the latest release binaries.
+
+The update method depends on how greywall was originally installed:
+  - Installed via install.sh → downloads and replaces binaries automatically
+  - Installed via Homebrew  → prints the brew upgrade command to run
+  - Installed from source   → prints manual instructions
+
+Examples:
+  greywall update          # update to latest stable
+  greywall update --beta   # update to latest beta`,
+		Args: cobra.NoArgs,
+		RunE: runUpdate,
+	}
+	cmd.Flags().Bool("beta", false, "Update to the latest beta (pre-release) version")
+	return cmd
+}
+
+// installMethod represents how greywall was originally installed.
+type installMethod int
+
+const (
+	installMethodScript installMethod = iota // install.sh → ~/.local/bin
+	installMethodBrew                        // Homebrew
+	installMethodSource                      // built from source / unknown
+)
+
+// detectInstallMethod returns how the currently running greywall was installed.
+func detectInstallMethod(selfPath string) installMethod {
+	if proxy.IsBrewManaged(selfPath) {
+		return installMethodBrew
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		localBin := filepath.Join(home, ".local", "bin")
+		if filepath.Dir(selfPath) == localBin {
+			return installMethodScript
+		}
+	}
+	return installMethodSource
+}
+
+func runUpdate(cmd *cobra.Command, _ []string) error {
+	beta, _ := cmd.Flags().GetBool("beta")
+
+	// Fetch latest tags for both tools
+	greyproxyTag, err := proxy.CheckLatestTag(beta)
+	if err != nil {
+		if beta {
+			return fmt.Errorf("no beta release available for greyproxy yet — try 'greywall update' for the latest stable")
+		}
+		return fmt.Errorf("failed to fetch latest greyproxy tag: %w", err)
+	}
+	greywallTag, err := proxy.CheckLatestTagFor("GreyhavenHQ", "greywall", beta)
+	if err != nil {
+		if beta {
+			return fmt.Errorf("no beta release available for greywall yet — try 'greywall update' for the latest stable")
+		}
+		return fmt.Errorf("failed to fetch latest greywall tag: %w", err)
+	}
+
+	channel := "stable"
+	if beta {
+		channel = "beta"
+	}
+	fmt.Printf("Latest %s: greywall %s, greyproxy %s\n\n", channel, greywallTag, greyproxyTag)
+
+	// Detect how greywall was installed (resolve symlinks first)
+	selfPath, err := os.Executable()
+	if err != nil {
+		selfPath = ""
+	} else if resolved, err := filepath.EvalSymlinks(selfPath); err == nil {
+		selfPath = resolved
+	}
+
+	switch detectInstallMethod(selfPath) {
+	case installMethodBrew:
+		fmt.Printf("greywall is managed by Homebrew. To update both tools, run:\n")
+		fmt.Printf("  brew upgrade greywall greyproxy\n")
+		return nil
+
+	case installMethodSource:
+		fmt.Printf("greywall was installed from source. To update manually:\n\n")
+		fmt.Printf("  greywall:\n")
+		fmt.Printf("    git clone --branch %s https://github.com/GreyhavenHQ/greywall.git\n", greywallTag)
+		fmt.Printf("    cd greywall && make build && cp greywall ~/.local/bin/\n\n")
+		fmt.Printf("  greyproxy:\n")
+		fmt.Printf("    git clone --branch %s https://github.com/GreyhavenHQ/greyproxy.git\n", greyproxyTag)
+		fmt.Printf("    cd greyproxy && go build -o greyproxy ./cmd/greyproxy && greyproxy install --force\n")
+		return nil // exit 0 — not broken, just can't automate
+
+	default: // installMethodScript
+		// Update greyproxy via binary download
+		fmt.Println("==> Updating greyproxy...")
+		greyproxyStatus := proxy.Detect()
+		if !proxy.IsOlderVersion(greyproxyStatus.Version, greyproxyTag) {
+			fmt.Printf("greyproxy is already up to date (%s)\n", greyproxyTag)
+		} else if err := proxy.Install(proxy.InstallOptions{
+			Output: os.Stderr,
+			Tag:    greyproxyTag,
+		}); err != nil {
+			return fmt.Errorf("failed to update greyproxy: %w", err)
+		}
+
+		// Update greywall via binary download
+		fmt.Println("\n==> Updating greywall...")
+		if !proxy.IsOlderVersion(version, greywallTag) {
+			fmt.Printf("greywall is already up to date (%s)\n", greywallTag)
+		} else if err := updateSelf(greywallTag, selfPath, os.Stderr); err != nil {
+			return fmt.Errorf("failed to update greywall: %w", err)
+		}
+		fmt.Printf("\ngreywall and greyproxy are up to date on %s channel.\n", channel)
+		return nil
+	}
+}
+
+// updateSelf downloads the greywall release binary and replaces the running binary at execPath.
+func updateSelf(tag, execPath string, output io.Writer) error {
+	_, _ = fmt.Fprintf(output, "Downloading greywall %s...\n", tag)
+
+	binPath, cleanup, err := proxy.DownloadGreywallBinary(tag)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	_, _ = fmt.Fprintf(output, "Replacing %s...\n", execPath)
+	if err := os.Rename(binPath, execPath); err != nil {
+		// Rename across filesystems fails; copy instead
+		if err2 := copyFileTo(binPath, execPath); err2 != nil {
+			return fmt.Errorf("failed to replace binary: %w (copy also failed: %v)", err, err2)
+		}
+	}
+
+	_, _ = fmt.Fprintf(output, "greywall updated to %s\n", tag)
+	return nil
+}
+
+// copyFileTo copies src to dst atomically (write to temp, then rename).
+func copyFileTo(src, dst string) error {
+	in, err := os.Open(src) //nolint:gosec // src is a path we control
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+
+	tmpDst := dst + ".new"
+	out, err := os.OpenFile(tmpDst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmpDst) }()
+
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpDst, dst)
 }
 
 // newCompletionCmd creates the completion subcommand for shell completions.

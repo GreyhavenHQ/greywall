@@ -62,6 +62,8 @@ curl -fsSL https://raw.githubusercontent.com/GreyhavenHQ/greywall/main/install.s
 
 ```bash
 go install github.com/GreyhavenHQ/greywall/cmd/greywall@latest
+# greyproxy is not included — install it separately:
+greywall setup
 ```
 
 **[mise](https://mise.jdx.dev/):**
@@ -77,6 +79,8 @@ mise use -g github:GreyhavenHQ/greyproxy
 git clone https://github.com/GreyhavenHQ/greywall
 cd greywall
 make setup && make build
+# greyproxy is not included — install it separately:
+greywall setup
 ```
 
 </details>

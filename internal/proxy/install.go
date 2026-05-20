@@ -38,6 +38,8 @@ type asset struct {
 // InstallOptions controls the greyproxy installation behavior.
 type InstallOptions struct {
 	Output io.Writer // progress output (typically os.Stderr)
+	Tag    string    // specific tag to install; if empty, uses latest stable
+	Beta   bool      // if Tag is empty and Beta is true, fetches latest pre-release tag
 }
 
 // CheckLatestVersion fetches the latest greyproxy release tag from GitHub
@@ -82,7 +84,7 @@ func IsOlderVersion(current, latest string) bool {
 	return false
 }
 
-// Install downloads the latest greyproxy release and runs "greyproxy install".
+// Install downloads the latest (or specified) greyproxy release and runs "greyproxy install".
 // Set GREYWALL_NO_GREYPROXY_INSTALL=1 to skip installation entirely.
 func Install(opts InstallOptions) error {
 	if os.Getenv("GREYWALL_NO_GREYPROXY_INSTALL") == "1" {
@@ -93,30 +95,42 @@ func Install(opts InstallOptions) error {
 		opts.Output = os.Stderr
 	}
 
-	// 1. Fetch latest release
-	_, _ = fmt.Fprintf(opts.Output, "Fetching latest greyproxy release...\n")
-	rel, err := fetchLatestRelease()
-	if err != nil {
-		return fmt.Errorf("failed to fetch latest release: %w", err)
+	// Resolve which tag to install
+	var rel *release
+	var err error
+	switch {
+	case opts.Tag != "":
+		rel, err = fetchReleaseFor(nil, "", githubOwner, githubRepo, "tags/"+opts.Tag)
+	case opts.Beta:
+		tag, tagErr := fetchLatestPreReleaseTagFor(nil, "", githubOwner, githubRepo)
+		if tagErr != nil {
+			return fmt.Errorf("failed to fetch latest pre-release: %w", tagErr)
+		}
+		rel, err = fetchReleaseFor(nil, "", githubOwner, githubRepo, "tags/"+tag)
+	default:
+		rel, err = fetchLatestRelease()
 	}
-	ver := strings.TrimPrefix(rel.TagName, "v")
-	_, _ = fmt.Fprintf(opts.Output, "Latest version: %s\n", ver)
+	if err != nil {
+		return fmt.Errorf("failed to fetch release: %w", err)
+	}
 
-	// 2. Find the correct asset for this platform
+	_, _ = fmt.Fprintf(opts.Output, "Fetching greyproxy release %s...\n", rel.TagName)
+
+	// Find the correct asset for this platform
 	assetURL, assetName, err := resolveAssetURL(rel)
 	if err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(opts.Output, "Downloading %s...\n", assetName)
 
-	// 3. Download to temp file
+	// Download to temp file
 	archivePath, err := downloadAsset(assetURL)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
 	defer func() { _ = os.Remove(archivePath) }()
 
-	// 4. Extract
+	// Extract
 	_, _ = fmt.Fprintf(opts.Output, "Extracting...\n")
 	extractDir, err := extractTarGz(archivePath)
 	if err != nil {
@@ -124,19 +138,17 @@ func Install(opts InstallOptions) error {
 	}
 	defer func() { _ = os.RemoveAll(extractDir) }()
 
-	// 5. Find the greyproxy binary in extracted content
+	// Find the greyproxy binary in extracted content
 	binaryPath := filepath.Join(extractDir, "greyproxy")
 	if _, err := os.Stat(binaryPath); err != nil {
 		return fmt.Errorf("greyproxy binary not found in archive")
 	}
 
-	// 6. Shell out to "greyproxy install"
 	_, _ = fmt.Fprintf(opts.Output, "\n")
 	if err := runGreyproxyInstall(binaryPath); err != nil {
 		return fmt.Errorf("greyproxy install failed: %w", err)
 	}
 
-	// 7. Verify
 	_, _ = fmt.Fprintf(opts.Output, "\nVerifying installation...\n")
 	status := Detect()
 	if status.Installed {
@@ -152,37 +164,98 @@ func Install(opts InstallOptions) error {
 	return nil
 }
 
+// DownloadGreywallBinary downloads the greywall release binary for the current platform
+// to a temp directory and returns the path to the extracted binary.
+// tag must include the "v" prefix (e.g. "v0.2.0").
+// The caller is responsible for removing the returned directory when done.
+func DownloadGreywallBinary(tag string) (binPath string, cleanup func(), err error) {
+	rel, err := fetchReleaseFor(nil, "", "GreyhavenHQ", "greywall", "tags/"+tag)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to fetch greywall release %s: %w", tag, err)
+	}
+
+	downloadURL, _, err := resolveGreywallAssetURL(rel)
+	if err != nil {
+		return "", nil, err
+	}
+
+	archivePath, err := downloadAsset(downloadURL)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to download greywall %s: %w", tag, err)
+	}
+
+	extractDir, err := extractTarGz(archivePath)
+	_ = os.Remove(archivePath)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to extract greywall archive: %w", err)
+	}
+
+	bin := filepath.Join(extractDir, "greywall")
+	if _, err := os.Stat(bin); err != nil {
+		_ = os.RemoveAll(extractDir)
+		return "", nil, fmt.Errorf("greywall binary not found in archive")
+	}
+
+	return bin, func() { _ = os.RemoveAll(extractDir) }, nil
+}
+
+// CheckLatestTag returns the latest greyproxy release tag (with "v" prefix).
+// If beta is true, returns the latest pre-release tag.
+func CheckLatestTag(beta bool) (string, error) {
+	return CheckLatestTagFor(githubOwner, githubRepo, beta)
+}
+
+// CheckLatestTagFor returns the latest release tag for any GitHub repo.
+// If beta is true, returns the latest pre-release tag; otherwise returns the latest stable tag.
+func CheckLatestTagFor(owner, repo string, beta bool) (string, error) {
+	return checkLatestTagFor(nil, "", owner, repo, beta)
+}
+
+func checkLatestTagFor(client *http.Client, apiBase, owner, repo string, beta bool) (string, error) {
+	if !beta {
+		rel, err := fetchReleaseFor(client, apiBase, owner, repo, "latest")
+		if err != nil {
+			return "", err
+		}
+		return rel.TagName, nil
+	}
+	return fetchLatestPreReleaseTagFor(client, apiBase, owner, repo)
+}
+
 // fetchLatestRelease queries the GitHub API for the latest greyproxy release.
 func fetchLatestRelease() (*release, error) {
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", githubOwner, githubRepo)
+	return fetchReleaseFor(nil, "", githubOwner, githubRepo, "latest")
+}
 
-	client := &http.Client{Timeout: apiTimeout}
+// runGreyproxyInstall shells out to the extracted greyproxy binary with "install --force".
+func runGreyproxyInstall(binaryPath string) error {
+	cmd := exec.Command(binaryPath, "install", "--force") //nolint:gosec // binaryPath is from our extracted archive
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return nil, err
+// resolveGreywallAssetURL finds the correct greywall asset URL for the current OS/arch.
+// Greywall uses GoReleaser defaults: title-case OS (Darwin/Linux) and x86_64 for amd64.
+func resolveGreywallAssetURL(rel *release) (downloadURL, name string, err error) {
+	ver := strings.TrimPrefix(rel.TagName, "v")
+	goos := runtime.GOOS
+	osName := strings.ToUpper(goos[:1]) + goos[1:]
+	archName := runtime.GOARCH
+	switch archName {
+	case "amd64":
+		archName = "x86_64"
+	case "386":
+		archName = "i386"
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "greywall-setup")
 
-	resp, err := client.Do(req) //nolint:gosec // apiURL is built from hardcoded constants
-	if err != nil {
-		return nil, fmt.Errorf("GitHub API request failed: %w", err)
+	expected := fmt.Sprintf("greywall_%s_%s_%s.tar.gz", ver, osName, archName)
+	for _, a := range rel.Assets {
+		if a.Name == expected {
+			return a.BrowserDownloadURL, a.Name, nil
+		}
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
-	}
-
-	var rel release
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return nil, fmt.Errorf("failed to parse release response: %w", err)
-	}
-	return &rel, nil
+	return "", "", fmt.Errorf("no greywall asset found for %s/%s (expected: %s)", goos, runtime.GOARCH, expected)
 }
 
 // resolveAssetURL finds the correct asset download URL for the current OS/arch.
@@ -213,7 +286,7 @@ func downloadAsset(downloadURL string) (string, error) {
 		return "", err
 	}
 
-	resp, err := client.Do(req) //nolint:gosec // downloadURL comes from GitHub API response
+	resp, err := client.Do(req) //nolint:gosec // downloadURL comes from GitHub API response or hardcoded constants
 	if err != nil {
 		return "", err
 	}
@@ -223,7 +296,7 @@ func downloadAsset(downloadURL string) (string, error) {
 		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
 	}
 
-	tmpFile, err := os.CreateTemp("", "greyproxy-*.tar.gz")
+	tmpFile, err := os.CreateTemp("", "greywall-download-*.tar.gz")
 	if err != nil {
 		return "", err
 	}
@@ -252,7 +325,7 @@ func extractTarGz(archivePath string) (string, error) {
 	}
 	defer func() { _ = gz.Close() }()
 
-	tmpDir, err := os.MkdirTemp("", "greyproxy-extract-*")
+	tmpDir, err := os.MkdirTemp("", "greywall-extract-*")
 	if err != nil {
 		return "", err
 	}
@@ -295,10 +368,87 @@ func extractTarGz(archivePath string) (string, error) {
 	return tmpDir, nil
 }
 
-// runGreyproxyInstall shells out to the extracted greyproxy binary with "install --force".
-func runGreyproxyInstall(binaryPath string) error {
-	cmd := exec.Command(binaryPath, "install", "--force") //nolint:gosec // binaryPath is from our extracted archive
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+// fetchReleaseFor fetches a specific GitHub release endpoint (e.g. "latest" or a tag name).
+// client and apiBase are optional; nil/empty use production defaults.
+func fetchReleaseFor(client *http.Client, apiBase, owner, repo, endpoint string) (*release, error) {
+	if client == nil {
+		client = &http.Client{Timeout: apiTimeout}
+	}
+	if apiBase == "" {
+		apiBase = "https://api.github.com"
+	}
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases/%s", apiBase, owner, repo, endpoint)
+
+	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "greywall-setup")
+
+	resp, err := client.Do(req) //nolint:gosec // apiURL is built from controlled inputs
+	if err != nil {
+		return nil, fmt.Errorf("GitHub API request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+
+	var rel release
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, fmt.Errorf("failed to parse release response: %w", err)
+	}
+	return &rel, nil
+}
+
+// fetchLatestPreReleaseTagFor returns the most recent pre-release tag for the given repo.
+// client and apiBase are optional; nil/empty use production defaults.
+func fetchLatestPreReleaseTagFor(client *http.Client, apiBase, owner, repo string) (string, error) {
+	if client == nil {
+		client = &http.Client{Timeout: apiTimeout}
+	}
+	if apiBase == "" {
+		apiBase = "https://api.github.com"
+	}
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=20", apiBase, owner, repo)
+
+	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "greywall-setup")
+
+	resp, err := client.Do(req) //nolint:gosec // apiURL is built from controlled inputs
+	if err != nil {
+		return "", fmt.Errorf("GitHub API request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		PreRelease bool   `json:"prerelease"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return "", fmt.Errorf("failed to parse releases response: %w", err)
+	}
+
+	for _, r := range releases {
+		if r.PreRelease {
+			return r.TagName, nil
+		}
+	}
+	return "", fmt.Errorf("no pre-release found for %s/%s", owner, repo)
 }
