@@ -95,14 +95,17 @@ homebrew_casks:
     license: "Apache-2.0"
     binaries:
       - greywall
+    # Alias greywatch -> greywall. argv[0] dispatch in the binary enables
+    # observe-only mode automatically. Injected via custom_block because
+    # goreleaser's binaries: list does not support the `target:` option.
+    custom_block: |
+      binary "greywall", target: "greywatch"
     hooks:
       post:
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/greywall"]
           end
-          # greywatch is the same binary; argv[0] dispatch enables observe-only mode.
-          File.symlink("greywall", "#{staged_path}/greywatch") unless File.exist?("#{staged_path}/greywatch")
     dependencies:
       - cask: greyproxy
     caveats: |
