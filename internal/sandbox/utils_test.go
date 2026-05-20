@@ -137,7 +137,7 @@ func TestGenerateProxyEnvVars(t *testing.T) {
 			httpProxyURL: "",
 			wantEnvs: []string{
 				"GREYWALL_SANDBOX=1",
-				"TMPDIR=/tmp/greywall",
+				"TMPDIR=/tmp/test-greywall",
 			},
 			dontWant: []string{
 				"HTTP_PROXY=",
@@ -200,7 +200,7 @@ func TestGenerateProxyEnvVars(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := GenerateProxyEnvVars(tt.proxyURL, tt.httpProxyURL)
+			got := GenerateProxyEnvVars(tt.proxyURL, tt.httpProxyURL, "/tmp/test-greywall")
 
 			// Check expected env vars are present
 			for _, want := range tt.wantEnvs {

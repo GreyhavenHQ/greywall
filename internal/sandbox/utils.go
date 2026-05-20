@@ -51,10 +51,11 @@ func NormalizePath(pathPattern string) string {
 // GenerateProxyEnvVars creates environment variables for proxy configuration.
 // Used on macOS where transparent proxying is not available.
 // proxyURL is the SOCKS5 proxy (for ALL_PROXY), httpProxyURL is the HTTP CONNECT proxy (for HTTP_PROXY/HTTPS_PROXY).
-func GenerateProxyEnvVars(proxyURL, httpProxyURL string) []string {
-	envVars := []string{
-		"GREYWALL_SANDBOX=1",
-		"TMPDIR=/tmp/greywall",
+// tmpDir is the per-session temporary directory to expose as TMPDIR; if empty, TMPDIR is not overridden.
+func GenerateProxyEnvVars(proxyURL, httpProxyURL, tmpDir string) []string {
+	envVars := []string{"GREYWALL_SANDBOX=1"}
+	if tmpDir != "" {
+		envVars = append(envVars, "TMPDIR="+tmpDir)
 	}
 
 	if proxyURL == "" && httpProxyURL == "" {

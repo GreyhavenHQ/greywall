@@ -37,6 +37,16 @@ func init() {
 					"/Library/Application Support/ClaudeCode/managed-settings.json",
 					"/Library/Application Support/ClaudeCode/managed-mcp.json",
 					"/Library/Application Support/ClaudeCode/CLAUDE.md",
+					// Claude Code creates session dirs under /private/tmp/claude-{uid}/
+					// and a working-dir tracker at /tmp/claude-{pid}-cwd. Both use
+					// numeric suffixes (UID or PID) that vary per user/run.
+					"/tmp/claude-*",
+					"/tmp/claude-*/**",
+				)
+				allowWrite = append(
+					allowWrite,
+					"/tmp/claude-*",
+					"/tmp/claude-*/**",
 				)
 			}
 			return &config.Config{

@@ -70,8 +70,6 @@ func GetDefaultWritePaths() []string {
 		"/dev/tty",
 		"/dev/dtracehelper",
 		"/dev/autofs_nowait",
-		"/tmp/greywall",
-		"/private/tmp/greywall",
 	}
 
 	if home != "" {
