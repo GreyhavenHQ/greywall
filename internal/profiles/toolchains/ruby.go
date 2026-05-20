@@ -15,7 +15,8 @@ func init() {
 			allowRead := []string{"~/.gem", "~/.bundle", "~/.rbenv", "~/.rvm", "~/.config/gem"}
 			if runtime.GOOS == "darwin" {
 				// macOS ships a system Ruby under /Library/Ruby
-				allowRead = append(allowRead,
+				allowRead = append(
+					allowRead,
 					"/Library/Ruby",
 				)
 			}

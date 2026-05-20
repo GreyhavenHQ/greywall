@@ -662,7 +662,8 @@ func TestLinux_ForwardBridgeConnectsToHost(t *testing.T) {
 	cfg.Network.ForwardPorts = []int{19999}
 
 	// Start a listener on port 19999 that responds with "FORWARD_OK"
-	listener := exec.Command("socat", //nolint:gosec
+	listener := exec.Command(
+		"socat", //nolint:gosec
 		"TCP-LISTEN:19999,fork,reuseaddr",
 		`EXEC:'echo HTTP/1.0 200 OK\r\n\r\nFORWARD_OK'`,
 	)

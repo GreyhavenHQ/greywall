@@ -13,7 +13,8 @@ func init() {
 		Overlay: func() *config.Config {
 			allowRead := []string{"~/.codex", "~/.cache/codex"}
 			if runtime.GOOS == "darwin" {
-				allowRead = append(allowRead,
+				allowRead = append(
+					allowRead,
 					"~/Library/Preferences/com.openai.codex.plist",
 					"/Library/Preferences/com.openai.codex.plist",
 					"/Library/Managed Preferences/com.openai.codex.plist",

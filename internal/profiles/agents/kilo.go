@@ -14,7 +14,8 @@ func init() {
 			allowRead := []string{"~/.kilocode", "~/.roo", "~/.config/kilo", "~/.cache/kilo", "~/.local/share/kilo", "~/.local/state/kilo"}
 			allowWrite := []string{"~/.kilocode", "~/.roo", "~/.config/kilo", "~/.cache/kilo", "~/.local/share/kilo", "~/.local/state/kilo"}
 			if runtime.GOOS == "darwin" {
-				allowRead = append(allowRead,
+				allowRead = append(
+					allowRead,
 					"/Library/Application Support/RooCode",
 				)
 				vsCodeKilo := "~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code"

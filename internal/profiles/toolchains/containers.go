@@ -16,12 +16,14 @@ func init() {
 			allowWrite := []string{"~/.docker", "~/.config/containers", "~/.kube", "~/.config/helm", "~/.cache/helm"}
 			if runtime.GOOS == "darwin" {
 				// macOS Docker alternatives: OrbStack, Colima, Rancher Desktop
-				allowRead = append(allowRead,
+				allowRead = append(
+					allowRead,
 					"~/.orbstack",
 					"~/.colima",
 					"~/.rd",
 				)
-				allowWrite = append(allowWrite,
+				allowWrite = append(
+					allowWrite,
 					"~/.orbstack",
 					"~/.colima",
 					"~/.rd",

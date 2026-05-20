@@ -75,7 +75,8 @@ func GetDefaultWritePaths() []string {
 	}
 
 	if home != "" {
-		paths = append(paths,
+		paths = append(
+			paths,
 			filepath.Join(home, ".npm/_logs"),
 			filepath.Join(home, ".greywall/debug"),
 		)
@@ -143,7 +144,8 @@ func GetDefaultReadablePaths() []string {
 	// read access to their full directories (not just bin/) to function properly.
 	// Runtimes load libraries, modules, and configs from within these directories.
 	if home != "" {
-		paths = append(paths,
+		paths = append(
+			paths,
 			// macOS user preferences and keychain (needed for TLS certificate verification)
 			filepath.Join(home, "Library/Preferences"),
 			filepath.Join(home, "Library/Keychains"),

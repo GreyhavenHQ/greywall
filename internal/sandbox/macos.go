@@ -168,7 +168,8 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 
 		// Allow reading data from essential system paths
 		for _, systemPath := range GetDefaultReadablePaths() {
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(allow file-read-data",
 				fmt.Sprintf("  (subpath %s))", escapePath(systemPath)),
 			)
@@ -176,14 +177,16 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 
 		// Allow reading CWD (full recursive read access)
 		if cwd != "" {
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(allow file-read-data",
 				fmt.Sprintf("  (subpath %s))", escapePath(cwd)),
 			)
 
 			// Allow ancestor directory traversal (literal only, so programs can resolve CWD path)
 			for _, ancestor := range getAncestorDirectories(cwd) {
-				rules = append(rules,
+				rules = append(
+					rules,
 					fmt.Sprintf("(allow file-read-data (literal %s))", escapePath(ancestor)),
 				)
 			}
@@ -196,7 +199,8 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 			shellConfigs := []string{".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile", ".zshenv", ".inputrc"}
 			for _, f := range shellConfigs {
 				p := filepath.Join(home, f)
-				rules = append(rules,
+				rules = append(
+					rules,
 					fmt.Sprintf("(allow file-read-data (literal %s))", escapePath(p)),
 				)
 			}
@@ -205,7 +209,8 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 			homeCaches := []string{".cache", ".npm", ".cargo", ".rustup", ".local", ".config", ".nvm", ".pyenv", ".rbenv", ".asdf"}
 			for _, d := range homeCaches {
 				p := filepath.Join(home, d)
-				rules = append(rules,
+				rules = append(
+					rules,
 					"(allow file-read-data",
 					fmt.Sprintf("  (subpath %s))", escapePath(p)),
 				)
@@ -218,12 +223,14 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 
 			if ContainsGlobChars(normalized) {
 				regex := GlobToRegex(normalized)
-				rules = append(rules,
+				rules = append(
+					rules,
 					"(allow file-read-data",
 					fmt.Sprintf("  (regex %s))", escapePath(regex)),
 				)
 			} else {
-				rules = append(rules,
+				rules = append(
+					rules,
 					"(allow file-read-data",
 					fmt.Sprintf("  (subpath %s))", escapePath(normalized)),
 				)
@@ -243,7 +250,8 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 				if _, ok := rewrittenEnvFiles[p]; ok {
 					continue // credential substitution active; allow read
 				}
-				rules = append(rules,
+				rules = append(
+					rules,
 					"(deny file-read-data",
 					fmt.Sprintf("  (literal %s)", escapePath(p)),
 					fmt.Sprintf("  (with message %q))", logTag),
@@ -253,7 +261,8 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 			// Only add the .env.* regex deny if not all files are handled by
 			// credential substitution.
 			if deniedFiles > 0 {
-				rules = append(rules,
+				rules = append(
+					rules,
 					"(deny file-read-data",
 					fmt.Sprintf("  (regex %s)", escapePath("^"+regexp.QuoteMeta(cwd)+"/\\.env\\..*$")),
 					fmt.Sprintf("  (with message %q))", logTag),
@@ -267,7 +276,8 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 
 	// Deny sensitive system files (greyproxy encryption key, CA private key)
 	for _, p := range GetSensitiveSystemPaths() {
-		rules = append(rules,
+		rules = append(
+			rules,
 			"(deny file-read-data",
 			fmt.Sprintf("  (literal %s)", escapePath(p)),
 			fmt.Sprintf("  (with message %q))", logTag),
@@ -282,13 +292,15 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 
 		if ContainsGlobChars(normalized) {
 			regex := GlobToRegex(normalized)
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(deny file-read-data",
 				fmt.Sprintf("  (regex %s)", escapePath(regex)),
 				fmt.Sprintf("  (with message %q))", logTag),
 			)
 		} else {
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(deny file-read-data",
 				fmt.Sprintf("  (subpath %s)", escapePath(normalized)),
 				fmt.Sprintf("  (with message %q))", logTag),
@@ -309,7 +321,8 @@ func generateWriteRules(cwd string, allowPaths, denyPaths []string, allowGitConf
 
 	// Auto-allow CWD for writes (project directory should be writable)
 	if cwd != "" {
-		rules = append(rules,
+		rules = append(
+			rules,
 			"(allow file-write*",
 			fmt.Sprintf("  (subpath %s)", escapePath(cwd)),
 			fmt.Sprintf("  (with message %q))", logTag),
@@ -319,7 +332,8 @@ func generateWriteRules(cwd string, allowPaths, denyPaths []string, allowGitConf
 	// Allow TMPDIR parent on macOS
 	for _, tmpdirParent := range getTmpdirParent() {
 		normalized := NormalizePath(tmpdirParent)
-		rules = append(rules,
+		rules = append(
+			rules,
 			"(allow file-write*",
 			fmt.Sprintf("  (subpath %s)", escapePath(normalized)),
 			fmt.Sprintf("  (with message %q))", logTag),
@@ -332,13 +346,15 @@ func generateWriteRules(cwd string, allowPaths, denyPaths []string, allowGitConf
 
 		if ContainsGlobChars(normalized) {
 			regex := GlobToRegex(normalized)
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(allow file-write*",
 				fmt.Sprintf("  (regex %s)", escapePath(regex)),
 				fmt.Sprintf("  (with message %q))", logTag),
 			)
 		} else {
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(allow file-write*",
 				fmt.Sprintf("  (subpath %s)", escapePath(normalized)),
 				fmt.Sprintf("  (with message %q))", logTag),
@@ -361,13 +377,15 @@ func generateWriteRules(cwd string, allowPaths, denyPaths []string, allowGitConf
 
 		if ContainsGlobChars(normalized) {
 			regex := GlobToRegex(normalized)
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(deny file-write*",
 				fmt.Sprintf("  (regex %s)", escapePath(regex)),
 				fmt.Sprintf("  (with message %q))", logTag),
 			)
 		} else {
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(deny file-write*",
 				fmt.Sprintf("  (subpath %s)", escapePath(normalized)),
 				fmt.Sprintf("  (with message %q))", logTag),
@@ -390,7 +408,8 @@ func generateMoveBlockingRules(pathPatterns []string, logTag string) []string {
 
 		if ContainsGlobChars(normalized) {
 			regex := GlobToRegex(normalized)
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(deny file-write-unlink",
 				fmt.Sprintf("  (regex %s)", escapePath(regex)),
 				fmt.Sprintf("  (with message %q))", logTag),
@@ -406,14 +425,16 @@ func generateMoveBlockingRules(pathPatterns []string, logTag string) []string {
 					baseDir = filepath.Dir(staticPrefix)
 				}
 
-				rules = append(rules,
+				rules = append(
+					rules,
 					"(deny file-write-unlink",
 					fmt.Sprintf("  (literal %s)", escapePath(baseDir)),
 					fmt.Sprintf("  (with message %q))", logTag),
 				)
 
 				for _, ancestor := range getAncestorDirectories(baseDir) {
-					rules = append(rules,
+					rules = append(
+						rules,
 						"(deny file-write-unlink",
 						fmt.Sprintf("  (literal %s)", escapePath(ancestor)),
 						fmt.Sprintf("  (with message %q))", logTag),
@@ -421,14 +442,16 @@ func generateMoveBlockingRules(pathPatterns []string, logTag string) []string {
 				}
 			}
 		} else {
-			rules = append(rules,
+			rules = append(
+				rules,
 				"(deny file-write-unlink",
 				fmt.Sprintf("  (subpath %s)", escapePath(normalized)),
 				fmt.Sprintf("  (with message %q))", logTag),
 			)
 
 			for _, ancestor := range getAncestorDirectories(normalized) {
-				rules = append(rules,
+				rules = append(
+					rules,
 					"(deny file-write-unlink",
 					fmt.Sprintf("  (literal %s)", escapePath(ancestor)),
 					fmt.Sprintf("  (with message %q))", logTag),

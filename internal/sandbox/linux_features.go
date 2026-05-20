@@ -359,7 +359,8 @@ func PrintDependencyStatus() []string {
 
 		if !features.CanUnshareNet && features.HasBwrap {
 			if val := readSysctl("kernel/apparmor_restrict_unprivileged_userns"); val == "1" {
-				steps = append(steps,
+				steps = append(
+					steps,
 					"sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
 					"echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-greywall-userns.conf",
 				)

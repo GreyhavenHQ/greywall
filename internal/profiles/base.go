@@ -46,7 +46,8 @@ func BaseProfile() *config.Config {
 	}
 
 	if runtime.GOOS == "darwin" {
-		allowRead = append(allowRead,
+		allowRead = append(
+			allowRead,
 			// macOS keychain (credential storage equivalent to secret-tool/pass on Linux)
 			"~/Library/Keychains",
 			"/Library/Keychains/System.keychain",
@@ -54,7 +55,8 @@ func BaseProfile() *config.Config {
 			"~/.CFUserTextEncoding",
 			"~/Library/Preferences/.GlobalPreferences.plist",
 		)
-		allowWrite = append(allowWrite,
+		allowWrite = append(
+			allowWrite,
 			"~/Library/Keychains",
 		)
 	}

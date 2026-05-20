@@ -34,11 +34,13 @@ func init() {
 			}
 			if runtime.GOOS == "darwin" {
 				// Playwright and Cypress store browser binaries in ~/Library/Caches on macOS
-				allowRead = append(allowRead,
+				allowRead = append(
+					allowRead,
 					"~/Library/Caches/ms-playwright",
 					"~/Library/Caches/Cypress",
 				)
-				allowWrite = append(allowWrite,
+				allowWrite = append(
+					allowWrite,
 					"~/Library/Caches/ms-playwright",
 					"~/Library/Caches/Cypress",
 				)

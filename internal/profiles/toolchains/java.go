@@ -14,7 +14,8 @@ func init() {
 		Overlay: func() *config.Config {
 			allowRead := []string{"~/.m2", "~/.gradle", "~/.java", "~/.sdkman", "~/.config/jgit"}
 			if runtime.GOOS == "darwin" {
-				allowRead = append(allowRead,
+				allowRead = append(
+					allowRead,
 					"/Library/Java/JavaVirtualMachines",
 				)
 			}

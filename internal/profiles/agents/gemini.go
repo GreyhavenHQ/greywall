@@ -13,7 +13,8 @@ func init() {
 		Overlay: func() *config.Config {
 			allowRead := []string{"~/.gemini", "~/.cache/gemini"}
 			if runtime.GOOS == "darwin" {
-				allowRead = append(allowRead,
+				allowRead = append(
+					allowRead,
 					"/Library/Application Support/GeminiCli",
 				)
 			}

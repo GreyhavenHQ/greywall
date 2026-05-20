@@ -1294,7 +1294,8 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	var dnsRelayResolvConf string // temp file path for custom resolv.conf
 	var caCertPath string         // greyproxy CA cert path (if available)
 	if proxyBridge != nil {
-		bwrapArgs = append(bwrapArgs,
+		bwrapArgs = append(
+			bwrapArgs,
 			"--bind", proxyBridge.SocketPath, proxyBridge.SocketPath,
 		)
 
@@ -1320,7 +1321,8 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 
 		// Bind DNS bridge socket if available
 		if dnsBridge != nil {
-			bwrapArgs = append(bwrapArgs,
+			bwrapArgs = append(
+				bwrapArgs,
 				"--bind", dnsBridge.SocketPath, dnsBridge.SocketPath,
 			)
 		}
@@ -1501,7 +1503,8 @@ export no_proxy=localhost,127.0.0.1
 		for i, port := range reverseBridge.Ports {
 			socketPath := reverseBridge.SocketPaths[i]
 			// Listen on Unix socket, forward to localhost:port inside the sandbox
-			fmt.Fprintf(&innerScript,
+			fmt.Fprintf(
+				&innerScript,
 				"socat UNIX-LISTEN:%s,fork,reuseaddr TCP:127.0.0.1:%d >/dev/null 2>&1 &\n",
 				socketPath, port,
 			)
@@ -1516,7 +1519,8 @@ export no_proxy=localhost,127.0.0.1
 		for i, port := range forwardBridge.Ports {
 			socketPath := forwardBridge.SocketPaths[i]
 			// Listen on localhost:port inside the sandbox, forward to Unix socket -> host localhost:port
-			fmt.Fprintf(&innerScript,
+			fmt.Fprintf(
+				&innerScript,
 				"socat TCP-LISTEN:%d,fork,reuseaddr,bind=127.0.0.1 UNIX-CONNECT:%s >/dev/null 2>&1 &\n",
 				port, socketPath,
 			)
@@ -1548,7 +1552,8 @@ sleep 0.3
 	// the common case of background daemons (LSP servers, watchers).
 	switch {
 	case opts.Learning && opts.StraceLogPath != "":
-		fmt.Fprintf(&innerScript, `# Learning mode: trace filesystem access (foreground for terminal access)
+		fmt.Fprintf(
+			&innerScript, `# Learning mode: trace filesystem access (foreground for terminal access)
 strace -f -qq -I2 -e trace=openat,open,creat,mkdir,mkdirat,unlinkat,renameat,renameat2,symlinkat,linkat -o %s -- %s
 GREYWALL_STRACE_EXIT=$?
 # Kill any orphaned child processes (LSP servers, file watchers, etc.)
