@@ -143,6 +143,23 @@ greywall check
 greywall setup
 ```
 
+### Grant extra filesystem access (per session)
+
+Greywall only allows the current directory by default. To open one extra directory or file for a single run — without writing a profile — use `--allow-path` (read+write) or `--allow-read-path` (read-only). Both are repeatable, accept a directory or a file, and persist nothing.
+
+```bash
+# Read+write scratch directory for this run
+greywall --allow-path /tmp/work -- mytool
+
+# Read-only reference data (writes to it stay blocked)
+greywall --allow-read-path /data/reference.csv -- mytool
+
+# Mix: read-only inputs, read+write output
+greywall --allow-read-path /data/refs --allow-path /tmp/out -- mytool
+```
+
+For a persistent grant, use `filesystem.allowRead` / `filesystem.allowWrite` in your [config](#configuration) instead.
+
 ### Agent profiles
 
 Greywall ships with built-in sandbox profiles for popular AI coding agents (Claude Code, Codex, Cursor, Aider, Goose, Gemini CLI, OpenCode, Amp, Cline, Copilot, Kilo, Auggie, Droid) and toolchains (Node, Python, Go, Rust, Java, Ruby, Docker).
