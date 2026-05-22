@@ -28,7 +28,7 @@ Because filtering lives in the proxy, domain allowlists, rule changes, and live 
 - `allowLocalBinding`: lets a sandboxed process *listen* on local ports (e.g., dev servers).
 - `allowLocalOutbound`: lets a sandboxed process connect to host `localhost` services (macOS only; see below).
 - `-p/--port`: exposes inbound ports so things outside the sandbox can reach your server.
-- `-f/--forward`: forwards a host localhost port *into* the sandbox (Linux only).
+- `-f/--forward`: forwards a host localhost port *into* the sandbox.
 - `forwardPorts`: config-file equivalent of `-f` for specifying ports to forward.
 
 These are separate on purpose. A typical safe default for dev servers is:
@@ -38,13 +38,13 @@ These are separate on purpose. A typical safe default for dev servers is:
 
 ### Port forwarding: platform differences
 
-On macOS, the sandbox shares the host network stack, so `allowLocalOutbound: true` is enough for the sandboxed process to reach any host localhost service.
+On macOS, the sandbox shares the host network stack, so `allowLocalOutbound: true` lets the sandboxed process reach *any* host localhost service. To reach only *specific* host ports, use `-f <port>` (or `forwardPorts`), which adds a targeted Seatbelt allow rule for just those ports.
 
-On Linux, the sandbox runs in an isolated network namespace (bubblewrap `--unshare-net`). The host's `localhost` is not reachable from inside the sandbox. To connect to a specific host service, you must explicitly forward its port with `-f` (or `forwardPorts` in the config file).
+On Linux, the sandbox runs in an isolated network namespace (bubblewrap `--unshare-net`). The host's `localhost` is not reachable from inside the sandbox. To connect to a specific host service, you must explicitly forward its port with `-f` (or `forwardPorts` in the config file), which sets up a socat bridge.
 
 | Feature | macOS | Linux |
 |---------|-------|-------|
-| Sandbox connects to host `localhost` | `allowLocalOutbound: true` | `-f <port>` or `forwardPorts: [port]` |
+| Sandbox connects to host `localhost` | `allowLocalOutbound: true` (all ports) or `-f <port>` (specific ports) | `-f <port>` or `forwardPorts: [port]` |
 | Host connects to sandbox port | `-p <port>` | `-p <port>` |
 | Sandbox listens on local port | `allowLocalBinding: true` | `allowLocalBinding: true` |
 

@@ -172,6 +172,80 @@ func TestMacOS_ProfileNetworkSection(t *testing.T) {
 	}
 }
 
+// TestMacOS_ProfileForwardPorts verifies that -f/--forward ports produce
+// per-port localhost outbound allow rules in the Seatbelt profile, and that
+// they are omitted when localhost outbound is already broadly allowed.
+func TestMacOS_ProfileForwardPorts(t *testing.T) {
+	tests := []struct {
+		name               string
+		allowLocalOutbound bool
+		forwardPorts       []int
+		wantContains       []string
+		wantNotContain     []string
+	}{
+		{
+			name:         "single forwarded port",
+			forwardPorts: []int{42000},
+			wantContains: []string{
+				`(allow network-outbound (remote ip "localhost:42000"))`,
+			},
+			wantNotContain: []string{
+				`(allow network-outbound (local ip "localhost:*"))`,
+			},
+		},
+		{
+			name:         "multiple forwarded ports",
+			forwardPorts: []int{5432, 6379},
+			wantContains: []string{
+				`(allow network-outbound (remote ip "localhost:5432"))`,
+				`(allow network-outbound (remote ip "localhost:6379"))`,
+			},
+		},
+		{
+			name:               "broad localhost outbound supersedes per-port rules",
+			allowLocalOutbound: true,
+			forwardPorts:       []int{42000},
+			wantContains: []string{
+				`(allow network-outbound (local ip "localhost:*"))`,
+			},
+			wantNotContain: []string{
+				`(allow network-outbound (remote ip "localhost:42000"))`,
+			},
+		},
+		{
+			name:         "no forwarded ports, no per-port rules",
+			forwardPorts: nil,
+			wantNotContain: []string{
+				`(allow network-outbound (remote ip "localhost:`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := MacOSSandboxParams{
+				Command:                 "echo test",
+				NeedsNetworkRestriction: true,
+				AllowLocalOutbound:      tt.allowLocalOutbound,
+				ForwardPorts:            tt.forwardPorts,
+			}
+
+			profile := GenerateSandboxProfile(params)
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(profile, want) {
+					t.Errorf("profile should contain %q, got:\n%s", want, profile)
+				}
+			}
+			for _, notWant := range tt.wantNotContain {
+				if strings.Contains(profile, notWant) {
+					t.Errorf("profile should NOT contain %q, got:\n%s", notWant, profile)
+				}
+			}
+		})
+	}
+}
+
 // TestMacOS_DefaultDenyRead verifies that the defaultDenyRead option properly restricts filesystem reads.
 func TestMacOS_DefaultDenyRead(t *testing.T) {
 	tests := []struct {

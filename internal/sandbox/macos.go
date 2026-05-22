@@ -41,6 +41,7 @@ type MacOSSandboxParams struct {
 	AllowAllUnixSockets     bool
 	AllowLocalBinding       bool
 	AllowLocalOutbound      bool
+	ForwardPorts            []int // Host localhost ports to allow outbound to (-f/--forward)
 	DefaultDenyRead         bool
 	Cwd                     string // Current working directory (for deny-by-default CWD allowlisting)
 	ReadAllowPaths          []string
@@ -636,6 +637,14 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 		if params.AllowLocalOutbound {
 			profile.WriteString(`(allow network-outbound (local ip "localhost:*"))
 `)
+		} else {
+			// Forwarded ports (-f/--forward): allow outbound to specific host
+			// localhost ports. On macOS the network is shared with the host (no
+			// namespace), so forwarding is just a targeted allow rule rather than
+			// the socat bridge used on Linux. Redundant if AllowLocalOutbound is set.
+			for _, port := range params.ForwardPorts {
+				fmt.Fprintf(&profile, "(allow network-outbound (remote ip \"localhost:%d\"))\n", port)
+			}
 		}
 
 		if params.AllowAllUnixSockets {
@@ -757,6 +766,7 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, re
 		AllowAllUnixSockets:     cfg.Network.AllowAllUnixSockets,
 		AllowLocalBinding:       allowLocalBinding,
 		AllowLocalOutbound:      allowLocalOutbound,
+		ForwardPorts:            cfg.Network.ForwardPorts,
 		DefaultDenyRead:         cfg.Filesystem.IsDefaultDenyRead(),
 		Cwd:                     cwd,
 		ReadAllowPaths:          cfg.Filesystem.AllowRead,
@@ -773,6 +783,9 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, re
 	}
 	if debug && allowLocalBinding && !allowLocalOutbound {
 		fmt.Fprintf(os.Stderr, "[greywall:macos] Blocking localhost outbound (AllowLocalOutbound=false)\n")
+	}
+	if debug && !allowLocalOutbound && len(cfg.Network.ForwardPorts) > 0 {
+		fmt.Fprintf(os.Stderr, "[greywall:macos] Forwarding host localhost ports: %v\n", cfg.Network.ForwardPorts)
 	}
 
 	profile := GenerateSandboxProfile(params)

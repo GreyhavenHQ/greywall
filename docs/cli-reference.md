@@ -24,7 +24,7 @@ greywall <subcommand> [args...]
 | `--http-proxy <url>` | | Override the HTTP CONNECT proxy URL (default: `http://localhost:43051`) |
 | `--dns <addr>` | | Override the host-side DNS server address (default: `localhost:43053`) |
 | `--port <port>` | `-p` | Expose a port for inbound connections into the sandbox (repeatable) |
-| `--forward <port>` | `-f` | Forward a host `localhost` port into the sandbox (Linux only, repeatable) |
+| `--forward <port>` | `-f` | Forward a host `localhost` port into the sandbox (Linux and macOS, repeatable) |
 | `--command <cmd>` | `-c` | Run a shell command string (supports `&&`, `;`, pipes) |
 | `--debug` | `-d` | Verbose output: proxy activity, filter decisions, sandbox command |
 | `--monitor` | `-m` | Show only violations and blocked requests (audit mode) |
@@ -60,9 +60,9 @@ greywall -p 3000 -c "npm run dev"
 greywall -p 3000 -p 8080 -c "make start"
 ```
 
-### `-f / --forward` (Linux only)
+### `-f / --forward`
 
-Forward a host `localhost` port *into* the sandbox so the sandboxed process can reach a host service (database, cache, and so on). This is the Linux equivalent of `allowLocalOutbound` on macOS, which only works there because the macOS sandbox shares the host network stack.
+Forward a host `localhost` port *into* the sandbox so the sandboxed process can reach a host service (database, cache, and so on). Works on both platforms: on Linux it sets up a socat bridge through the isolated network namespace; on macOS it adds a targeted Seatbelt allow rule for just those ports (a narrower alternative to `allowLocalOutbound`, which opens *all* host localhost ports).
 
 ```bash
 # Reach a host Postgres from inside the sandbox
