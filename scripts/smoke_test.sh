@@ -150,6 +150,41 @@ else
 fi
 
 echo ""
+echo "=== Session allow-path / allow-read-path ==="
+echo ""
+
+# Use /var/tmp (not /tmp, which bwrap overlays with tmpfs) for a dir OUTSIDE the
+# CWD, to prove the flags grant access beyond the default cwd-only sandbox.
+EXTRA_DIR="/var/tmp/greywall-allowpath-test-$$"
+mkdir -p "$EXTRA_DIR"
+echo "reference data" > "$EXTRA_DIR/ref.txt"
+trap "rm -rf $WORKSPACE $EXTRA_DIR" EXIT
+
+# Negative control: without the flag, writing outside the CWD is denied.
+run_test "write outside CWD blocked (no flag)" "fail" \
+    "$GREYWALL_BIN" -c "echo x > $EXTRA_DIR/nope.txt"
+rm -f "$EXTRA_DIR/nope.txt" 2>/dev/null || true
+
+# --allow-path grants read+write: writing into the extra dir succeeds.
+run_test "--allow-path allows write" "pass" \
+    "$GREYWALL_BIN" --allow-path "$EXTRA_DIR" -c "echo hi > $EXTRA_DIR/out.txt"
+if [[ -f "$EXTRA_DIR/out.txt" ]]; then
+    echo -e "Testing: --allow-path file actually created... ${GREEN}PASS${NC}"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "Testing: --allow-path file actually created... ${RED}FAIL${NC} (file does not exist)"
+    FAILED=$((FAILED + 1))
+fi
+
+# --allow-read-path grants read-only: reading succeeds...
+run_test "--allow-read-path allows read" "pass" \
+    "$GREYWALL_BIN" --allow-read-path "$EXTRA_DIR" -c "cat $EXTRA_DIR/ref.txt"
+# ...but writing is still denied.
+run_test "--allow-read-path denies write" "fail" \
+    "$GREYWALL_BIN" --allow-read-path "$EXTRA_DIR" -c "echo x > $EXTRA_DIR/should_fail.txt"
+rm -f "$EXTRA_DIR/should_fail.txt" 2>/dev/null || true
+
+echo ""
 echo "=== Command Blocking ==="
 echo ""
 

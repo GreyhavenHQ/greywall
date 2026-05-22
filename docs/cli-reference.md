@@ -29,6 +29,8 @@ greywall <subcommand> [args...]
 | `--debug` | `-d` | Verbose output: proxy activity, filter decisions, sandbox command |
 | `--monitor` | `-m` | Show only violations and blocked requests (audit mode) |
 | `--learning` | | Trace filesystem access with strace/eslogger and auto-generate a profile |
+| `--allow-path <path>` | | Grant read+write access to a directory **or** file for this session only (repeatable). Nothing is persisted. See [below](#--allow-path-and---allow-read-path). |
+| `--allow-read-path <path>` | | Grant read-only access to a directory **or** file for this session only (repeatable). Nothing is persisted. |
 | `--secret <VAR>` | | Treat an environment variable as a credential even if it doesn't match the auto-detection rules (repeatable). See [Credential Protection](./credential-protection). |
 | `--inject <LABEL>` | | Inject a credential stored in the greyproxy dashboard into the sandbox by label (repeatable) |
 | `--ignore-secret <VAR>` | | Exclude a variable from credential detection even if it matches the heuristics (repeatable) |
@@ -73,6 +75,31 @@ greywall -f 5432 -f 6379 -- make test
 ```
 
 See [Concepts](./concepts#port-forwarding-platform-differences) for the full explanation of the platform difference.
+
+### `--allow-path` and `--allow-read-path`
+
+Greywall is deny-by-default for the filesystem: a sandboxed command can only touch the current working directory (plus system paths). When you just need one extra directory or file for a single run — a scratch/temp dir, a sibling project, a reference dataset — these flags grant it **for that session only**. Nothing is written to disk and no profile is created or modified; for a persistent grant, use `filesystem.allowRead` / `filesystem.allowWrite` in your [config](./configuration).
+
+- `--allow-path` grants **read+write**.
+- `--allow-read-path` grants **read-only** (writes stay blocked).
+
+Both are repeatable and accept either a **directory or a file**. Paths may be absolute, relative (resolved against the CWD), or `~`-prefixed.
+
+```bash
+# Read+write scratch directory for this run
+greywall --allow-path /tmp/work -- mytool
+
+# Several extra paths at once
+greywall --allow-path /tmp/work --allow-path ~/.cache/foo -- mytool
+
+# Read-only reference data (a single file here); writes to it are denied
+greywall --allow-read-path /data/reference.csv -- mytool
+
+# Mix: read-only inputs, read+write output
+greywall --allow-read-path /data/refs --allow-path /tmp/out -- mytool
+```
+
+These compose with profiles — they are added on top of whatever a profile already allows.
 
 ## Subcommands
 

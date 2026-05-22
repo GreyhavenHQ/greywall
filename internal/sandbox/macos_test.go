@@ -366,6 +366,48 @@ func TestMacOS_DenyReadUserPaths(t *testing.T) {
 	}
 }
 
+// TestMacOS_SessionAllowPaths verifies the Seatbelt profile distinguishes
+// read+write grants (--allow-path) from read-only grants (--allow-read-path):
+// a read-write path gets both a read-data and a file-write* allow, while a
+// read-only path gets a read-data allow but NO file-write* allow. Covers both
+// a directory and a single file (the file case must not get a write rule).
+func TestMacOS_SessionAllowPaths(t *testing.T) {
+	rwDir := "/home/user/scratch"
+	roDir := "/home/user/reference"
+	roFile := "/home/user/reference.csv"
+
+	params := MacOSSandboxParams{
+		Command:         "echo test",
+		DefaultDenyRead: true,
+		Cwd:             "/home/user/project",
+		// --allow-path appends to both read and write; --allow-read-path to read only.
+		ReadAllowPaths:  []string{roDir, roFile, rwDir},
+		WriteAllowPaths: []string{rwDir},
+	}
+
+	profile := GenerateSandboxProfile(params)
+
+	// Read-write path: present as both a read allow and a write allow.
+	if !strings.Contains(profile, fmt.Sprintf(`(subpath %q)`, rwDir)) {
+		t.Errorf("rw path %q missing read allow\nProfile:\n%s", rwDir, profile)
+	}
+	wantWrite := fmt.Sprintf("(allow file-write*\n  (subpath %q)", rwDir)
+	if !strings.Contains(profile, wantWrite) {
+		t.Errorf("rw path %q missing file-write* allow\nExpected: %s\nProfile:\n%s", rwDir, wantWrite, profile)
+	}
+
+	// Read-only directory and file: read allow present, write allow absent.
+	for _, ro := range []string{roDir, roFile} {
+		if !strings.Contains(profile, fmt.Sprintf(`(subpath %q)`, ro)) {
+			t.Errorf("read-only path %q missing read allow\nProfile:\n%s", ro, profile)
+		}
+		unwantedWrite := fmt.Sprintf("(allow file-write*\n  (subpath %q)", ro)
+		if strings.Contains(profile, unwantedWrite) {
+			t.Errorf("read-only path %q must NOT have a file-write* allow\nProfile:\n%s", ro, profile)
+		}
+	}
+}
+
 // TestExpandMacOSTmpPaths verifies that /tmp and /private/tmp paths are properly mirrored.
 func TestExpandMacOSTmpPaths(t *testing.T) {
 	tests := []struct {

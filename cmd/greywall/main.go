@@ -55,6 +55,8 @@ var (
 	ignoreVars             []string
 	skipVersionCheck       bool
 	allowDests             []string
+	allowPaths             []string
+	allowReadPaths         []string
 	blankProfile           bool
 	watch                  bool
 )
@@ -99,6 +101,8 @@ Examples:
   greywall -p 3000 -c "npm run dev"                             # Expose port 3000
   greywall -f 5432 -- psql -h localhost                          # Forward host port into sandbox
   greywall --learning -- opencode                                # Learn filesystem needs
+  greywall --allow-path /tmp/work -- mytool      # Grant rw to an extra dir/file for this run
+  greywall --allow-read-path /data/refs -- mytool # Grant read-only to a dir/file for this run
   greywall --secret MY_VAR -- command            # Protect a custom env var
   greywall --inject ANTHROPIC_API_KEY -- command  # Inject from proxy dashboard
 
@@ -146,6 +150,8 @@ Configuration file format:
 	rootCmd.Flags().BoolVar(&skipVersionCheck, "skip-version-check", false, "Skip greyproxy version check (for testing)")
 	_ = rootCmd.Flags().MarkHidden("skip-version-check")
 	rootCmd.Flags().StringArrayVar(&allowDests, "allow", nil, "Allow a network destination for this session (e.g. --allow api.example.com:443)")
+	rootCmd.Flags().StringArrayVar(&allowPaths, "allow-path", nil, "Allow read+write access to a directory or file for this session (repeatable, e.g. --allow-path /tmp/work)")
+	rootCmd.Flags().StringArrayVar(&allowReadPaths, "allow-read-path", nil, "Allow read-only access to a directory or file for this session (repeatable, e.g. --allow-read-path /data/refs)")
 	rootCmd.Flags().BoolVar(&blankProfile, "blank", false, "With --learning, skip default profile network rules (start from scratch)")
 	rootCmd.Flags().BoolVar(&watch, "watch", false, "Watch mode: skip profile loading, allow all network (logged on dashboard), permissive filesystem — observability only, no deny-by-default")
 
@@ -406,6 +412,16 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		cfg.Command.UseDefaults = &falseVal
 		cfg.Command.Deny = nil
 		fmt.Fprintf(os.Stderr, "[greywall] Watch mode: no profile, all network allowed (logged on dashboard), permissive filesystem\n")
+	}
+
+	// Session-scoped filesystem grants from --allow-path / --allow-read-path.
+	// Applied after profile merge and watch overrides so they always take effect.
+	// Nothing is persisted; the sandbox resolves and binds these paths for this
+	// run only. Non-existent paths are tolerated (Linux skips them, macOS Seatbelt
+	// ignores them), matching the lenient behaviour of --allow.
+	applySessionAllowPaths(cfg, allowPaths, allowReadPaths)
+	if debug && (len(allowPaths) > 0 || len(allowReadPaths) > 0) {
+		fmt.Fprintf(os.Stderr, "[greywall] Session allow: %d rw, %d read-only path(s)\n", len(allowPaths), len(allowReadPaths))
 	}
 
 	// Learning mode setup
@@ -1405,6 +1421,21 @@ parseCommand:
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[greywall:landlock-wrapper] Exec failed: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// applySessionAllowPaths grants session-scoped filesystem access from the
+// --allow-path (read+write) and --allow-read-path (read-only) CLI flags.
+// Read-write paths are appended to both AllowRead and AllowWrite; read-only
+// paths are appended to AllowRead only. The underlying sandbox plumbing
+// (NormalizePath + per-platform binding) handles directories and files alike.
+func applySessionAllowPaths(cfg *config.Config, rwPaths, roPaths []string) {
+	if len(roPaths) > 0 {
+		cfg.Filesystem.AllowRead = append(cfg.Filesystem.AllowRead, roPaths...)
+	}
+	if len(rwPaths) > 0 {
+		cfg.Filesystem.AllowRead = append(cfg.Filesystem.AllowRead, rwPaths...)
+		cfg.Filesystem.AllowWrite = append(cfg.Filesystem.AllowWrite, rwPaths...)
 	}
 }
 
