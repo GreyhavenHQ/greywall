@@ -359,13 +359,14 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	//   2. cmdName               (auto-detected from the wrapped command)
 	//   3. "proxy"               (fallback, required by gost for auth)
 	// This always overrides any existing credentials in the URL.
-	proxyUser := "proxy"
-	switch {
-	case proxyUserFlag != "":
-		proxyUser = proxyUserFlag
-	case cmdName != "":
-		proxyUser = cmdName
-	}
+	//
+	// The same value is reused as the greyproxy session container name (see the
+	// RegisterSession calls below). greyproxy associates a live proxy connection
+	// with its session — and therefore enforces that session's network rules,
+	// including --allow — by matching the SOCKS5 login against the container
+	// name. The two MUST stay identical or session-scoped rules silently stop
+	// applying (notably whenever --proxy-user is set).
+	proxyUser := proxyIdentity(proxyUserFlag, cmdName)
 	for _, proxyField := range []*string{&cfg.Network.ProxyURL, &cfg.Network.HTTPProxyURL} {
 		if *proxyField != "" {
 			if u, err := url.Parse(*proxyField); err == nil {
@@ -555,10 +556,9 @@ func runCommand(cmd *cobra.Command, args []string) error {
 				detected = []sandbox.CredentialMapping{}
 			}
 
-			containerName := cmdName
-			if containerName == "" {
-				containerName = "sandbox"
-			}
+			// Must match the SOCKS5 login (proxyUser) so greyproxy maps this
+			// session's network rules onto the sandbox's proxy connection.
+			containerName := proxyUser
 
 			if len(detected) > 0 || len(injectLabels) > 0 {
 				// Build the set of credential key names for .env file scanning.
@@ -669,10 +669,9 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		sessionID, err := sandbox.GenerateSessionID()
 		if err == nil {
 			credSessionID = sessionID
-			containerName := cmdName
-			if containerName == "" {
-				containerName = "sandbox"
-			}
+			// Must match the SOCKS5 login (proxyUser) so greyproxy maps this
+			// session's network rules onto the sandbox's proxy connection.
+			containerName := proxyUser
 			cwd, _ := os.Getwd()
 			meta := &sandbox.SessionMetadata{
 				WorkDir: cwd,
@@ -901,6 +900,27 @@ func resolveProfile(name string, debug bool) (*config.Config, error) {
 	}
 
 	return nil, fmt.Errorf("profile %q not found (no saved profile and no built-in profile)\nRun: greywall profiles list", name)
+}
+
+// proxyIdentity returns the identity used both as the SOCKS5 login injected
+// into the proxy URL and as the greyproxy session container name. greyproxy
+// matches a live connection to its session — and thus enforces that session's
+// network rules, including --allow — by this login, so the two callers MUST
+// derive their value from here to keep them identical.
+//
+// Precedence (highest wins):
+//  1. proxyUserFlag (explicit --proxy-user override)
+//  2. cmdName       (auto-detected from the wrapped command)
+//  3. "proxy"       (fallback, required by gost for auth)
+func proxyIdentity(proxyUserFlag, cmdName string) string {
+	switch {
+	case proxyUserFlag != "":
+		return proxyUserFlag
+	case cmdName != "":
+		return cmdName
+	default:
+		return "proxy"
+	}
 }
 
 // extractCommandName extracts a human-readable command name from the arguments.
