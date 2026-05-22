@@ -1006,6 +1006,49 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 	return args
 }
 
+// writableBindArgs returns bwrap --bind args that make the configured writable
+// paths actually writable, overriding the read-only root. It covers the default
+// system write paths plus cfg.Filesystem.AllowWrite (which includes the
+// read+write grants from --allow-path). These binds are appended after the
+// read-only binds from buildDenyByDefaultMounts, so for a path that is both
+// readable and writable the later --bind wins. Only existing paths are bound;
+// bwrap rejects a missing source.
+func writableBindArgs(cfg *config.Config) []string {
+	writablePaths := make(map[string]bool)
+
+	// Default write paths (system paths needed for operation).
+	for _, p := range GetDefaultWritePaths() {
+		// Skip /dev paths (handled by --dev) and /tmp paths (handled by --tmpfs).
+		if strings.HasPrefix(p, "/dev/") || strings.HasPrefix(p, "/tmp/") || strings.HasPrefix(p, "/private/tmp/") {
+			continue
+		}
+		writablePaths[p] = true
+	}
+
+	// User-specified allowWrite paths.
+	if cfg != nil && cfg.Filesystem.AllowWrite != nil {
+		for _, p := range ExpandGlobPatterns(cfg.Filesystem.AllowWrite) {
+			writablePaths[p] = true
+		}
+
+		// Non-glob paths, normalized.
+		for _, p := range cfg.Filesystem.AllowWrite {
+			normalized := NormalizePath(p)
+			if !ContainsGlobChars(normalized) {
+				writablePaths[normalized] = true
+			}
+		}
+	}
+
+	var args []string
+	for p := range writablePaths {
+		if fileExists(p) {
+			args = append(args, "--bind", p, p)
+		}
+	}
+	return args
+}
+
 // isSystemMountPoint returns true if the path is a top-level system directory
 // that gets mounted directly under --tmpfs / (bwrap auto-creates these).
 func isSystemMountPoint(path string) bool {
@@ -1171,39 +1214,8 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	// deny (the sandbox is already permissive with home + cwd writable).
 	if !opts.Learning && !opts.Watch {
 
-		writablePaths := make(map[string]bool)
-
-		// Add default write paths (system paths needed for operation)
-		for _, p := range GetDefaultWritePaths() {
-			// Skip /dev paths (handled by --dev) and /tmp paths (handled by --tmpfs)
-			if strings.HasPrefix(p, "/dev/") || strings.HasPrefix(p, "/tmp/") || strings.HasPrefix(p, "/private/tmp/") {
-				continue
-			}
-			writablePaths[p] = true
-		}
-
-		// Add user-specified allowWrite paths
-		if cfg != nil && cfg.Filesystem.AllowWrite != nil {
-			expandedPaths := ExpandGlobPatterns(cfg.Filesystem.AllowWrite)
-			for _, p := range expandedPaths {
-				writablePaths[p] = true
-			}
-
-			// Add non-glob paths
-			for _, p := range cfg.Filesystem.AllowWrite {
-				normalized := NormalizePath(p)
-				if !ContainsGlobChars(normalized) {
-					writablePaths[normalized] = true
-				}
-			}
-		}
-
 		// Make writable paths actually writable (override read-only root)
-		for p := range writablePaths {
-			if fileExists(p) {
-				bwrapArgs = append(bwrapArgs, "--bind", p, p)
-			}
-		}
+		bwrapArgs = append(bwrapArgs, writableBindArgs(cfg)...)
 
 		// Handle denyRead paths - hide them
 		// For directories: use --tmpfs to replace with empty tmpfs

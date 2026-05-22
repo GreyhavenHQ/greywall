@@ -22,20 +22,27 @@ func hasBindTriple(args []string, flag, src, dst string) bool {
 	return false
 }
 
-// TestLinux_SessionAllowPaths verifies that buildDenyByDefaultMounts binds
-// --allow-path entries writable (--bind) and --allow-read-path entries
-// read-only (--ro-bind, never --bind). Covers a directory and a single file
-// (the file exercises the !isDirectory branch).
+// TestLinux_SessionAllowPaths verifies the two-layer Linux binding for
+// --allow-path / --allow-read-path grants:
+//
+//   - buildDenyByDefaultMounts grants read access (--ro-bind) to every path in
+//     AllowRead, i.e. both --allow-path and --allow-read-path entries.
+//   - writableBindArgs adds a writable --bind only for AllowWrite entries, i.e.
+//     --allow-path. Appended after the read-only binds, the later --bind wins,
+//     so the path ends up writable. Read-only paths get no --bind.
+//
+// Covers a directory and a single file (the file exercises the !isDirectory
+// branch in the read-bind layer).
 func TestLinux_SessionAllowPaths(t *testing.T) {
 	tmp := t.TempDir()
 	rwDir := filepath.Join(tmp, "scratch")
 	roDir := filepath.Join(tmp, "reference")
 	roFile := filepath.Join(tmp, "reference.csv")
 
-	if err := os.MkdirAll(rwDir, 0o755); err != nil {
+	if err := os.MkdirAll(rwDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(roDir, 0o755); err != nil {
+	if err := os.MkdirAll(roDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(roFile, []byte("data"), 0o600); err != nil {
@@ -50,25 +57,27 @@ func TestLinux_SessionAllowPaths(t *testing.T) {
 	cfg.Filesystem.AllowRead = []string{roDir, roFile, rwDir}
 	cfg.Filesystem.AllowWrite = []string{rwDir}
 
-	args := buildDenyByDefaultMounts(cfg, cwd, nil, nil, false)
-
 	// Paths are normalized (symlinks resolved) before binding.
 	wantRW := NormalizePath(rwDir)
 	wantRODir := NormalizePath(roDir)
 	wantROFile := NormalizePath(roFile)
 
-	// Read-write dir must be bound writable.
-	if !hasBindTriple(args, "--bind", wantRW, wantRW) {
-		t.Errorf("rw path %q not bound writable (--bind)\nargs: %v", wantRW, args)
+	// Read layer: every granted path is bound read-only.
+	readArgs := buildDenyByDefaultMounts(cfg, cwd, nil, nil, false)
+	for _, ro := range []string{wantRW, wantRODir, wantROFile} {
+		if !hasBindTriple(readArgs, "--ro-bind", ro, ro) {
+			t.Errorf("granted path %q not bound readable (--ro-bind)\nargs: %v", ro, readArgs)
+		}
 	}
 
-	// Read-only dir and file: bound read-only, never writable.
+	// Write layer: only the read-write path is bound writable.
+	writeArgs := writableBindArgs(cfg)
+	if !hasBindTriple(writeArgs, "--bind", wantRW, wantRW) {
+		t.Errorf("rw path %q not bound writable (--bind)\nargs: %v", wantRW, writeArgs)
+	}
 	for _, ro := range []string{wantRODir, wantROFile} {
-		if !hasBindTriple(args, "--ro-bind", ro, ro) {
-			t.Errorf("read-only path %q not bound --ro-bind\nargs: %v", ro, args)
-		}
-		if hasBindTriple(args, "--bind", ro, ro) {
-			t.Errorf("read-only path %q must NOT be bound writable (--bind)\nargs: %v", ro, args)
+		if hasBindTriple(writeArgs, "--bind", ro, ro) {
+			t.Errorf("read-only path %q must NOT be bound writable (--bind)\nargs: %v", ro, writeArgs)
 		}
 	}
 }
