@@ -102,7 +102,7 @@ Greywall routes all network traffic through an external SOCKS5 proxy. Domain fil
 | `allowAllUnixSockets` | Allow all Unix sockets |
 | `allowLocalBinding` | Allow binding to local ports |
 | `allowLocalOutbound` | Allow outbound connections to host `localhost`, e.g., local DBs. Defaults to `allowLocalBinding` if not set. **macOS only**; on Linux, use `forwardPorts` to reach specific host ports. |
-| `forwardPorts` | Host localhost ports to forward into the sandbox (Linux only; array of integers). Equivalent to repeated `-f/--forward` flags. |
+| `forwardPorts` | Host localhost ports to forward into the sandbox (array of integers). Equivalent to repeated `-f/--forward` flags. Works on Linux (socat bridge) and macOS (Seatbelt allow rule). |
 | `httpProxyUrl` | HTTP CONNECT proxy URL (default: `http://localhost:43051`) |
 
 ## Filesystem Configuration
