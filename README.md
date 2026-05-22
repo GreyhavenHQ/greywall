@@ -124,6 +124,10 @@ greywall --proxy socks5://localhost:1080 -- npm install
 # Expose a port for inbound connections (e.g., dev servers)
 greywall -p 3000 -c "npm run dev"
 
+# Grant an extra directory/file for this run (read+write, or read-only)
+greywall --allow-path /tmp/work -- mytool
+greywall --allow-read-path /data/refs -- mytool
+
 # Enable debug logging
 greywall -d -- curl https://example.com
 
@@ -142,23 +146,6 @@ greywall check
 # Install and start greyproxy
 greywall setup
 ```
-
-### Grant extra filesystem access (per session)
-
-Greywall only allows the current directory by default. To open one extra directory or file for a single run — without writing a profile — use `--allow-path` (read+write) or `--allow-read-path` (read-only). Both are repeatable, accept a directory or a file, and persist nothing.
-
-```bash
-# Read+write scratch directory for this run
-greywall --allow-path /tmp/work -- mytool
-
-# Read-only reference data (writes to it stay blocked)
-greywall --allow-read-path /data/reference.csv -- mytool
-
-# Mix: read-only inputs, read+write output
-greywall --allow-read-path /data/refs --allow-path /tmp/out -- mytool
-```
-
-For a persistent grant, use `filesystem.allowRead` / `filesystem.allowWrite` in your [config](#configuration) instead.
 
 ### Agent profiles
 
