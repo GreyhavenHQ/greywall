@@ -218,7 +218,7 @@ func (f *LinuxFeatures) detectNetworkNamespace() {
 		return
 	}
 
-	cmd := exec.Command("bwrap", "--unshare-net", "--ro-bind", "/", "/", "--", truePath)
+	cmd := exec.Command("bwrap", "--unshare-net", "--ro-bind", "/", "/", "--", truePath) //nolint:gosec
 	err = cmd.Run()
 	f.CanUnshareNet = err == nil
 }
