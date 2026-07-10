@@ -752,3 +752,32 @@ func SensitiveGreyproxyFiles() []string {
 		home + "/Library/Application Support/greyproxy/ca-key.pem",
 	}
 }
+
+// SensitiveGreyproxyDirs returns greyproxy data directories whose entire
+// contents must not be readable from inside the sandbox: the encrypted
+// credential store (greyproxy.db and its -wal/-shm side files), the session
+// encryption key, the CA private key, and any proxied request/response logs.
+//
+// Only the public CA certificate (ca-cert.pem) inside these directories is
+// legitimately needed inside the sandbox (for TLS trust); it is re-exposed
+// separately by the sandbox backend.
+func SensitiveGreyproxyDirs() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	dirs := []string{
+		// Linux (default XDG data home)
+		filepath.Join(home, ".local", "share", "greyproxy"),
+		// macOS
+		filepath.Join(home, "Library", "Application Support", "greyproxy"),
+	}
+
+	// Honor an explicit XDG_DATA_HOME override on Linux.
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		dirs = append(dirs, filepath.Join(xdg, "greyproxy"))
+	}
+
+	return dirs
+}

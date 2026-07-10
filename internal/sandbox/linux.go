@@ -797,10 +797,62 @@ func getMandatoryDenyPaths(cwd string) []string {
 		}
 	}
 
-	// Sensitive system files (greyproxy encryption key, CA private key)
-	paths = append(paths, GetSensitiveSystemPaths()...)
+	// NOTE: greyproxy secrets (session key, CA private key) are deliberately NOT
+	// added here. This function feeds the deny-WRITE idiom (--ro-bind realfile
+	// realfile), which keeps a path read-only but still READABLE. That is correct
+	// for dangerous files like .bashrc, but fatal for secrets: it would re-expose
+	// the real key bytes for reading (and, being emitted after the denyRead mask,
+	// clobber it). Secrets require deny-READ treatment and are handled separately
+	// by greyproxyDenyReadArgs().
 
 	return paths
+}
+
+// greyproxyDenyReadArgs returns bwrap arguments that make greyproxy's private
+// state unreadable inside the sandbox while preserving the public CA
+// certificate needed for TLS trust.
+//
+// These paths require deny-READ treatment (an empty /dev/null bind for files, an
+// empty tmpfs for directories) rather than the deny-WRITE idiom (--ro-bind
+// realfile realfile) used for dangerous files such as .bashrc. Binding the real
+// file read-only would leave the secret READABLE. The returned args must be
+// appended AFTER every other filesystem bind (home caches, mandatory deny,
+// deny-write) so that in bubblewrap's "last mount wins" model the mask is not
+// clobbered by an earlier bind of the real bytes.
+//
+// This mirrors the intent of the macOS Seatbelt backend, which already emits an
+// explicit (deny file-read-data ...) for these paths (see macos.go).
+func greyproxyDenyReadArgs() []string {
+	var args []string
+
+	// Replace each greyproxy data directory with an empty tmpfs. This hides the
+	// encrypted credential store (greyproxy.db plus its -wal/-shm side files),
+	// the session key, the CA private key, and any proxied request/response logs
+	// in one shot, instead of wholesale-binding the directory read-only (which
+	// the generic home-cache bind of ~/.local would otherwise do).
+	for _, dir := range SensitiveGreyproxyDirs() {
+		if isDirectory(dir) {
+			args = append(args, "--tmpfs", dir)
+		}
+	}
+
+	// Defense in depth: explicitly mask each individual sensitive file with an
+	// empty, unreadable file. This also protects installations where the file
+	// lives outside a directory covered above.
+	for _, p := range SensitiveGreyproxyFiles() {
+		if fileExists(p) && canMountOver(p) {
+			args = append(args, "--ro-bind", "/dev/null", p)
+		}
+	}
+
+	// Re-expose ONLY the public CA certificate (read-only) so sandboxed clients
+	// can still trust the greyproxy MITM CA. Emitted last so it wins over the
+	// tmpfs mask for this single, non-sensitive file.
+	if certPath := greyproxyCACertPath(); certPath != "" {
+		args = append(args, "--ro-bind", certPath, certPath)
+	}
+
+	return args
 }
 
 // buildDenyByDefaultMounts builds bwrap arguments for deny-by-default filesystem isolation.
@@ -1320,6 +1372,25 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		}
 
 	} // end if !opts.Learning && !opts.Watch
+
+	// Mask greyproxy's private state (session key, CA private key, encrypted
+	// credential store and proxied logs) with deny-READ mounts.
+	//
+	// This is applied in the enforcing path AND in --watch mode, gated only on
+	// "not learning". Watch mode uses a permissive layout (root read-only, home
+	// writable) and SKIPS the deny/mask block above, but credential substitution
+	// can still be active in watch mode (it is disabled only in learning mode) —
+	// so without this the offline-decrypt attack (readable session.key +
+	// greyproxy.db) would persist under --watch. The mask itself is a no-op when
+	// greyproxy is not set up (the paths simply don't exist).
+	//
+	// Emitted last so that in bubblewrap's "last mount wins" model it is not
+	// clobbered by an earlier bind of the real files (home caches, the permissive
+	// home bind, the mandatory-deny loop, deny-write). Only the public
+	// ca-cert.pem is re-exposed read-only, for TLS trust.
+	if !opts.Learning {
+		bwrapArgs = append(bwrapArgs, greyproxyDenyReadArgs()...)
+	}
 
 	// Bind the proxy bridge Unix socket into the sandbox (needs to be writable)
 	var dnsRelayResolvConf string // temp file path for custom resolv.conf
