@@ -737,20 +737,20 @@ func WarnMaskedEnvFiles(cwd string) {
 
 // SensitiveGreyproxyFiles returns paths to greyproxy files that must not be
 // readable from inside the sandbox (encryption key and CA private key).
+//
+// The list is derived from SensitiveGreyproxyDirs so the per-file deny-READ
+// masks can never drift from the directory masks (e.g. when XDG_DATA_HOME
+// relocates the data dir). See SensitiveGreyproxyDirs for how the candidate
+// directories are resolved.
 func SensitiveGreyproxyFiles() []string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
+	var files []string
+	for _, dir := range SensitiveGreyproxyDirs() {
+		files = append(files,
+			filepath.Join(dir, "session.key"),
+			filepath.Join(dir, "ca-key.pem"),
+		)
 	}
-
-	return []string{
-		// Linux
-		home + "/.local/share/greyproxy/session.key",
-		home + "/.local/share/greyproxy/ca-key.pem",
-		// macOS
-		home + "/Library/Application Support/greyproxy/session.key",
-		home + "/Library/Application Support/greyproxy/ca-key.pem",
-	}
+	return files
 }
 
 // SensitiveGreyproxyDirs returns greyproxy data directories whose entire
@@ -761,20 +761,27 @@ func SensitiveGreyproxyFiles() []string {
 // Only the public CA certificate (ca-cert.pem) inside these directories is
 // legitimately needed inside the sandbox (for TLS trust); it is re-exposed
 // separately by the sandbox backend.
+//
+// The XDG_DATA_HOME override is resolved INDEPENDENTLY of the home directory:
+// greyproxy (and greyproxyCACertPath) locate the data dir via $XDG_DATA_HOME
+// without needing HOME, so credential substitution can be active while HOME is
+// unset (common in containers / CI / systemd units). Returning early on a home
+// lookup error would then leave the store unmasked while it is still in use — a
+// fail-open leak. We therefore always append the XDG path when set, and only the
+// home-derived defaults depend on the home lookup succeeding.
 func SensitiveGreyproxyDirs() []string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
+	var dirs []string
+
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs,
+			// Linux (default XDG data home)
+			filepath.Join(home, ".local", "share", "greyproxy"),
+			// macOS
+			filepath.Join(home, "Library", "Application Support", "greyproxy"),
+		)
 	}
 
-	dirs := []string{
-		// Linux (default XDG data home)
-		filepath.Join(home, ".local", "share", "greyproxy"),
-		// macOS
-		filepath.Join(home, "Library", "Application Support", "greyproxy"),
-	}
-
-	// Honor an explicit XDG_DATA_HOME override on Linux.
+	// Honor an explicit XDG_DATA_HOME override (resolvable without HOME).
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		dirs = append(dirs, filepath.Join(xdg, "greyproxy"))
 	}

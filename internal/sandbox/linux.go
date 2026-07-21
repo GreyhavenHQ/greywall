@@ -822,6 +822,16 @@ func getMandatoryDenyPaths(cwd string) []string {
 //
 // This mirrors the intent of the macOS Seatbelt backend, which already emits an
 // explicit (deny file-read-data ...) for these paths (see macos.go).
+//
+// KNOWN LIMITATION (symlinks): the masks below act on the logical paths as
+// resolved from HOME/XDG_DATA_HOME. If an operator relocates the greyproxy data
+// dir (or an individual secret) via a symlink to a target that is separately
+// exposed by a broader bind, the tmpfs/`/dev/null` mask lands on the link path
+// and the real target may remain readable — canMountOver() also skips symlinked
+// files. This is not reachable in the standard deployment (greyproxy creates
+// real files under its data dir), so it is left as an upstream hardening item;
+// a full fix would filepath.EvalSymlinks the paths and mask both the logical and
+// resolved locations.
 func greyproxyDenyReadArgs() []string {
 	var args []string
 
@@ -1373,25 +1383,6 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 
 	} // end if !opts.Learning && !opts.Watch
 
-	// Mask greyproxy's private state (session key, CA private key, encrypted
-	// credential store and proxied logs) with deny-READ mounts.
-	//
-	// This is applied in the enforcing path AND in --watch mode, gated only on
-	// "not learning". Watch mode uses a permissive layout (root read-only, home
-	// writable) and SKIPS the deny/mask block above, but credential substitution
-	// can still be active in watch mode (it is disabled only in learning mode) —
-	// so without this the offline-decrypt attack (readable session.key +
-	// greyproxy.db) would persist under --watch. The mask itself is a no-op when
-	// greyproxy is not set up (the paths simply don't exist).
-	//
-	// Emitted last so that in bubblewrap's "last mount wins" model it is not
-	// clobbered by an earlier bind of the real files (home caches, the permissive
-	// home bind, the mandatory-deny loop, deny-write). Only the public
-	// ca-cert.pem is re-exposed read-only, for TLS trust.
-	if !opts.Learning {
-		bwrapArgs = append(bwrapArgs, greyproxyDenyReadArgs()...)
-	}
-
 	// Bind the proxy bridge Unix socket into the sandbox (needs to be writable)
 	var dnsRelayResolvConf string // temp file path for custom resolv.conf
 	var caCertPath string         // greyproxy CA cert path (if available)
@@ -1513,6 +1504,30 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	// because the binary path doesn't exist inside the sandbox.
 	if useLandlockWrapper && greywallExePath != "" {
 		bwrapArgs = append(bwrapArgs, "--ro-bind", greywallExePath, greywallExePath)
+	}
+
+	// Mask greyproxy's private state (session key, CA private key, encrypted
+	// credential store and proxied logs) with deny-READ mounts.
+	//
+	// This is applied in the enforcing path AND in --watch mode, gated only on
+	// "not learning". Watch mode uses a permissive layout (root read-only, home
+	// writable) and SKIPS the deny/mask block above, but credential substitution
+	// can still be active in watch mode (it is disabled only in learning mode) —
+	// so without this the offline-decrypt attack (readable session.key +
+	// greyproxy.db) would persist under --watch. The mask itself is a no-op when
+	// greyproxy is not set up (the paths simply don't exist).
+	//
+	// This MUST be the final block of filesystem-mount arguments, emitted after
+	// every other bind (home caches, the permissive home bind, the mandatory-deny
+	// loop, deny-write, the proxy/DNS/reverse/forward bridge socket-dir binds, and
+	// the greywall exe bind). In bubblewrap's "last mount wins" model this is what
+	// guarantees the mask cannot be clobbered by an earlier — or a hostile,
+	// e.g. a bridge socket path placed inside the greyproxy data dir — bind of the
+	// real files. Do NOT append further filesystem binds after this block; only
+	// the "--" command separator and the inner script may follow. Only the public
+	// ca-cert.pem is re-exposed read-only, for TLS trust.
+	if !opts.Learning {
+		bwrapArgs = append(bwrapArgs, greyproxyDenyReadArgs()...)
 	}
 
 	bwrapArgs = append(bwrapArgs, "--", shellPath, "-c")
