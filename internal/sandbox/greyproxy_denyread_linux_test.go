@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -280,24 +281,15 @@ func TestSensitiveGreyproxyPathsHonorXDG(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", xdg)
 
 	wantDir := filepath.Join(xdg, "greyproxy")
-	if !contains(SensitiveGreyproxyDirs(), wantDir) {
+	if !slices.Contains(SensitiveGreyproxyDirs(), wantDir) {
 		t.Errorf("SensitiveGreyproxyDirs missing XDG dir %q: %v", wantDir, SensitiveGreyproxyDirs())
 	}
 	for _, f := range []string{"session.key", "ca-key.pem"} {
 		want := filepath.Join(wantDir, f)
-		if !contains(SensitiveGreyproxyFiles(), want) {
+		if !slices.Contains(SensitiveGreyproxyFiles(), want) {
 			t.Errorf("SensitiveGreyproxyFiles missing XDG secret %q: %v", want, SensitiveGreyproxyFiles())
 		}
 	}
-}
-
-func contains(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // TestWrapCommandLinux_GreyproxySecretsUnreadableAtRuntime runs real bubblewrap
@@ -305,12 +297,8 @@ func contains(haystack []string, needle string) bool {
 // masked path reads empty and a re-exposed one reads "x". Skips when bwrap can't
 // create a namespace (e.g. unprivileged CI), per repo convention.
 func TestWrapCommandLinux_GreyproxySecretsUnreadableAtRuntime(t *testing.T) {
-	if os.Getenv("GREYWALL_SANDBOX") == "1" {
-		t.Skip("skipping: already running inside a sandbox")
-	}
-	if _, err := exec.LookPath("bwrap"); err != nil {
-		t.Skip("skipping: bwrap not found")
-	}
+	skipIfAlreadySandboxed(t)
+	skipIfCommandNotFound(t, "bwrap")
 
 	_, dataDir := seedGreyproxyDir(t)
 	cfg := &config.Config{Filesystem: config.FilesystemConfig{}}
