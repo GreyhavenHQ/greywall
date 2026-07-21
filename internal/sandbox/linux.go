@@ -797,67 +797,41 @@ func getMandatoryDenyPaths(cwd string) []string {
 		}
 	}
 
-	// NOTE: greyproxy secrets (session key, CA private key) are deliberately NOT
-	// added here. This function feeds the deny-WRITE idiom (--ro-bind realfile
-	// realfile), which keeps a path read-only but still READABLE. That is correct
-	// for dangerous files like .bashrc, but fatal for secrets: it would re-expose
-	// the real key bytes for reading (and, being emitted after the denyRead mask,
-	// clobber it). Secrets require deny-READ treatment and are handled separately
-	// by greyproxyDenyReadArgs().
+	// greyproxy secrets are NOT added here: this set feeds the deny-WRITE idiom
+	// (--ro-bind realfile realfile), which leaves the file readable — fatal for
+	// secrets. They get deny-READ treatment in greyproxyDenyReadArgs() instead.
 
 	return paths
 }
 
-// greyproxyDenyReadArgs returns bwrap arguments that make greyproxy's private
-// state unreadable inside the sandbox while preserving the public CA
-// certificate needed for TLS trust.
+// greyproxyDenyReadArgs returns bwrap args that make greyproxy's private state
+// unreadable while keeping the public ca-cert.pem readable for TLS trust.
 //
-// These paths require deny-READ treatment (an empty /dev/null bind for files, an
-// empty tmpfs for directories) rather than the deny-WRITE idiom (--ro-bind
-// realfile realfile) used for dangerous files such as .bashrc. Binding the real
-// file read-only would leave the secret READABLE. The returned args must be
-// appended AFTER every other filesystem bind (home caches, mandatory deny,
-// deny-write) so that in bubblewrap's "last mount wins" model the mask is not
-// clobbered by an earlier bind of the real bytes.
+// Secrets need deny-READ (mask with /dev/null or tmpfs), not the deny-WRITE
+// idiom (--ro-bind realfile realfile) which leaves them readable. These args
+// MUST be appended after every other bind so bubblewrap's "last mount wins"
+// keeps the mask (see the call site).
 //
-// This mirrors the intent of the macOS Seatbelt backend, which already emits an
-// explicit (deny file-read-data ...) for these paths (see macos.go).
-//
-// KNOWN LIMITATION (symlinks): the masks below act on the logical paths as
-// resolved from HOME/XDG_DATA_HOME. If an operator relocates the greyproxy data
-// dir (or an individual secret) via a symlink to a target that is separately
-// exposed by a broader bind, the tmpfs/`/dev/null` mask lands on the link path
-// and the real target may remain readable — canMountOver() also skips symlinked
-// files. This is not reachable in the standard deployment (greyproxy creates
-// real files under its data dir), so it is left as an upstream hardening item;
-// a full fix would filepath.EvalSymlinks the paths and mask both the logical and
-// resolved locations.
+// Symlink limitation: masks act on logical paths, so a data dir/secret
+// symlinked to a separately-exposed target could stay readable. Not reachable
+// in the standard deployment (greyproxy writes real files); left as upstream
+// hardening (EvalSymlinks the paths).
 func greyproxyDenyReadArgs() []string {
 	var args []string
 
-	// Replace each greyproxy data directory with an empty tmpfs. This hides the
-	// encrypted credential store (greyproxy.db plus its -wal/-shm side files),
-	// the session key, the CA private key, and any proxied request/response logs
-	// in one shot, instead of wholesale-binding the directory read-only (which
-	// the generic home-cache bind of ~/.local would otherwise do).
+	// tmpfs the whole data dir: hides the store, keys, and proxied logs at once.
 	for _, dir := range SensitiveGreyproxyDirs() {
 		if isDirectory(dir) {
 			args = append(args, "--tmpfs", dir)
 		}
 	}
-
-	// Defense in depth: explicitly mask each individual sensitive file with an
-	// empty, unreadable file. This also protects installations where the file
-	// lives outside a directory covered above.
+	// Defense in depth: mask each secret file individually.
 	for _, p := range SensitiveGreyproxyFiles() {
 		if fileExists(p) && canMountOver(p) {
 			args = append(args, "--ro-bind", "/dev/null", p)
 		}
 	}
-
-	// Re-expose ONLY the public CA certificate (read-only) so sandboxed clients
-	// can still trust the greyproxy MITM CA. Emitted last so it wins over the
-	// tmpfs mask for this single, non-sensitive file.
+	// Re-expose only the public CA cert, last so it wins over the tmpfs.
 	if certPath := greyproxyCACertPath(); certPath != "" {
 		args = append(args, "--ro-bind", certPath, certPath)
 	}
@@ -1506,26 +1480,12 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		bwrapArgs = append(bwrapArgs, "--ro-bind", greywallExePath, greywallExePath)
 	}
 
-	// Mask greyproxy's private state (session key, CA private key, encrypted
-	// credential store and proxied logs) with deny-READ mounts.
-	//
-	// This is applied in the enforcing path AND in --watch mode, gated only on
-	// "not learning". Watch mode uses a permissive layout (root read-only, home
-	// writable) and SKIPS the deny/mask block above, but credential substitution
-	// can still be active in watch mode (it is disabled only in learning mode) —
-	// so without this the offline-decrypt attack (readable session.key +
-	// greyproxy.db) would persist under --watch. The mask itself is a no-op when
-	// greyproxy is not set up (the paths simply don't exist).
-	//
-	// This MUST be the final block of filesystem-mount arguments, emitted after
-	// every other bind (home caches, the permissive home bind, the mandatory-deny
-	// loop, deny-write, the proxy/DNS/reverse/forward bridge socket-dir binds, and
-	// the greywall exe bind). In bubblewrap's "last mount wins" model this is what
-	// guarantees the mask cannot be clobbered by an earlier — or a hostile,
-	// e.g. a bridge socket path placed inside the greyproxy data dir — bind of the
-	// real files. Do NOT append further filesystem binds after this block; only
-	// the "--" command separator and the inner script may follow. Only the public
-	// ca-cert.pem is re-exposed read-only, for TLS trust.
+	// Mask greyproxy's private state. Gated on "not learning" (substitution is
+	// off only in learning mode) so it also covers --watch, which skips the
+	// deny block above. MUST stay the last filesystem-mount block: bubblewrap's
+	// "last mount wins" is what stops any earlier bind — including a hostile
+	// bridge socket path inside the data dir — from re-exposing the secrets. Do
+	// not append further binds after this; only "--" and the inner script follow.
 	if !opts.Learning {
 		bwrapArgs = append(bwrapArgs, greyproxyDenyReadArgs()...)
 	}

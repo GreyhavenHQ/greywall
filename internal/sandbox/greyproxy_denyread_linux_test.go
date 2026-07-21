@@ -48,12 +48,9 @@ type bwrapMount struct {
 	dest string
 }
 
-// parseBwrapMounts extracts the filesystem-mount arguments (in emission order)
-// from a generated bwrap command string. It considers only the portion BEFORE
-// the "--" command separator (everything after is the inner script, a single
-// quoted blob). It relies on the seeded paths containing no spaces or shell
-// metacharacters (t.TempDir on Linux) so ShellQuote leaves the mount args
-// untouched and strings.Fields recovers the tokens faithfully.
+// parseBwrapMounts extracts the mount args (in order) from a generated command,
+// ignoring everything after the "--" separator (the inner script). Assumes the
+// seeded paths have no spaces (t.TempDir on Linux) so Fields recovers tokens.
 func parseBwrapMounts(cmd string) []bwrapMount {
 	if i := strings.Index(cmd, " -- "); i >= 0 {
 		cmd = cmd[:i]
@@ -77,9 +74,8 @@ func parseBwrapMounts(cmd string) []bwrapMount {
 	return mounts
 }
 
-// lastDestIndex returns the index of the LAST mount whose dest == path, or -1.
-// Because bwrap follows "last mount wins", the mount at this index is the one
-// that is actually in effect at that path.
+// lastDestIndex returns the index of the last mount whose dest == path (the one
+// in effect under "last mount wins"), or -1.
 func lastDestIndex(mounts []bwrapMount, path string) int {
 	idx := -1
 	for i, m := range mounts {
@@ -90,10 +86,8 @@ func lastDestIndex(mounts []bwrapMount, path string) int {
 	return idx
 }
 
-// ancestorsOf returns every proper ancestor directory of path up to the
-// filesystem root ("/home/u/.local/share/greyproxy" -> ".local/share", ".local",
-// the home dir, ... , "/"). A bind of ANY of these that lands after the mask
-// would re-expose the greyproxy subtree.
+// ancestorsOf returns every proper ancestor directory of path up to "/". A bind
+// of any of these landing after the mask would re-expose the subtree.
 func ancestorsOf(path string) []string {
 	var out []string
 	for p := filepath.Dir(path); ; p = filepath.Dir(p) {
@@ -105,17 +99,9 @@ func ancestorsOf(path string) []string {
 	return out
 }
 
-// assertGreyproxyMaskWins is the core invariant check. Given the parsed mounts
-// of a generated command and the seeded data dir, it asserts that:
-//   - the data dir is masked with an empty tmpfs, and that tmpfs is the LAST
-//     mount targeting the data dir (so any earlier bind — including a hostile
-//     bridge socket dir placed inside it — is overridden);
-//   - NO ancestor directory of the data dir is bound AFTER the mask;
-//   - session.key / ca-key.pem are effectively /dev/null (their last mount has
-//     src == /dev/null), never re-exposed as the real file;
-//   - greyproxy.db is never the last mount at its own path as a real file;
-//   - ca-cert.pem IS re-exposed as the real file, and that re-bind wins over the
-//     tmpfs (comes after it).
+// assertGreyproxyMaskWins asserts the effective (last-wins) mounts leave the
+// data dir a tmpfs, no ancestor re-bound after it, the secret files masked with
+// /dev/null, greyproxy.db not re-exposed, and ca-cert.pem readable.
 func assertGreyproxyMaskWins(t *testing.T, mounts []bwrapMount, dataDir string) {
 	t.Helper()
 
@@ -128,9 +114,7 @@ func assertGreyproxyMaskWins(t *testing.T, mounts []bwrapMount, dataDir string) 
 			dataDir, mounts[maskIdx].flag, mounts[maskIdx].src, mounts)
 	}
 
-	// Generic ancestor check: no ancestor of the data dir may be (re-)bound after
-	// the mask, regardless of flag or exact path. This is what catches an
-	// unlisted clobbering ancestor (e.g. ~/.local, ~/.local/share, $HOME, /).
+	// No ancestor may be (re-)bound after the mask, whatever the flag or path.
 	for _, anc := range ancestorsOf(dataDir) {
 		if i := lastDestIndex(mounts, anc); i > maskIdx {
 			t.Errorf("ancestor %q is bound at index %d, AFTER the data-dir mask at %d — it re-exposes the greyproxy secrets; mounts=%+v",
@@ -138,17 +122,13 @@ func assertGreyproxyMaskWins(t *testing.T, mounts []bwrapMount, dataDir string) 
 		}
 	}
 
-	// Secret files: their effective (last) mount must be /dev/null, never the
-	// real file.
+	// Each secret file's effective mount must be /dev/null, never the real file.
 	for _, secret := range []string{
 		filepath.Join(dataDir, "session.key"),
 		filepath.Join(dataDir, "ca-key.pem"),
 	} {
 		i := lastDestIndex(mounts, secret)
 		if i < 0 {
-			// Covered solely by the dir tmpfs — acceptable, but the fix also
-			// emits an explicit /dev/null mask, so flag its absence as a
-			// defense-in-depth regression.
 			t.Errorf("secret %q has no explicit /dev/null mask (defense-in-depth); mounts=%+v", secret, mounts)
 			continue
 		}
@@ -158,7 +138,6 @@ func assertGreyproxyMaskWins(t *testing.T, mounts []bwrapMount, dataDir string) 
 		}
 	}
 
-	// greyproxy.db must never end up re-exposed as the real file.
 	db := filepath.Join(dataDir, "greyproxy.db")
 	if i := lastDestIndex(mounts, db); i >= 0 && mounts[i].src == db {
 		t.Errorf("greyproxy.db is re-exposed as the real file at index %d; mounts=%+v", i, mounts)
@@ -174,12 +153,8 @@ func assertGreyproxyMaskWins(t *testing.T, mounts []bwrapMount, dataDir string) 
 	}
 }
 
-// TestGreyproxyDenyReadArgs is a focused unit test for the deny-READ helper in
-// isolation: tmpfs on the data dir, /dev/null on each secret file, real
-// ca-cert re-exposed, no real-file re-bind of the secrets.
-//
-// It cannot observe clobbering by OTHER binds in the full command — that is what
-// TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch covers.
+// TestGreyproxyDenyReadArgs unit-tests the helper in isolation. Clobbering by
+// other binds is covered by TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch.
 func TestGreyproxyDenyReadArgs(t *testing.T) {
 	_, dataDir := seedGreyproxyDir(t)
 	sessionKey := filepath.Join(dataDir, "session.key")
@@ -206,9 +181,8 @@ func TestGreyproxyDenyReadArgs(t *testing.T) {
 	}
 }
 
-// TestGetMandatoryDenyPathsExcludesGreyproxySecrets asserts the greyproxy
-// secrets are NOT routed through the deny-WRITE mandatory path (which would
-// re-expose them readable).
+// TestGetMandatoryDenyPathsExcludesGreyproxySecrets asserts the secrets aren't
+// routed through the deny-WRITE path (which would leave them readable).
 func TestGetMandatoryDenyPathsExcludesGreyproxySecrets(t *testing.T) {
 	seedGreyproxyDir(t)
 
@@ -222,16 +196,10 @@ func TestGetMandatoryDenyPathsExcludesGreyproxySecrets(t *testing.T) {
 	}
 }
 
-// TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch drives the FULL
-// wrapper and asserts the deny-READ invariant against the complete generated
-// command in every mode where credential substitution can be active:
-//   - enforcing and --watch (the mask must apply in both; only learning is
-//     exempt);
-//   - with and without a HOSTILE reverse bridge whose socket dir is the greyproxy
-//     data dir itself, which emits a "--bind <data-dir> <data-dir>" AFTER the
-//     older mask position. This exercises the post-mask append region (bridge
-//     socket dirs, greywall exe bind, etc.) that a bridges-nil config never
-//     reaches, and would FAIL if the mask were not emitted genuinely last.
+// TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch drives the full
+// wrapper in enforcing and --watch modes. The hostile cases add a reverse bridge
+// whose socket dir is the data dir, emitting a "--bind <data-dir> <data-dir>" in
+// the post-mask region — which fails unless the mask is emitted genuinely last.
 func TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -247,14 +215,13 @@ func TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, dataDir := seedGreyproxyDir(t)
-			// Deny-by-default (DefaultDenyRead nil => true) exercises the
-			// ~/.local home-cache bind that originally clobbered the mask.
+			// Deny-by-default exercises the ~/.local home-cache bind that
+			// originally clobbered the mask.
 			cfg := &config.Config{Filesystem: config.FilesystemConfig{}}
 
 			var reverseBridge *ReverseBridge
 			if tc.hostile {
-				// Ports left nil so the inner-script socat loop is skipped; the
-				// mount bind of filepath.Dir(socket)==dataDir still fires.
+				// Nil Ports skips the socat loop; the socket-dir bind still fires.
 				reverseBridge = &ReverseBridge{SocketPaths: []string{filepath.Join(dataDir, "rev.sock")}}
 			}
 
@@ -267,9 +234,8 @@ func TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch(t *testing.T) {
 			assertGreyproxyMaskWins(t, mounts, dataDir)
 
 			if tc.hostile {
-				// Sanity: the regression scenario is actually present — a real
-				// --bind of the data dir exists before the mask. Without this,
-				// the test would pass vacuously if the bind were ever dropped.
+				// Sanity: confirm the hostile --bind is actually present (before
+				// the mask), so the test can't pass vacuously.
 				maskIdx := lastDestIndex(mounts, dataDir)
 				found := false
 				for i, m := range mounts {
@@ -287,10 +253,7 @@ func TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch(t *testing.T) {
 }
 
 // TestWrapCommandLinux_GreyproxyMaskWithXDGDataHome guards the XDG_DATA_HOME
-// relocation path: greyproxy's dir and per-file secrets must still be masked
-// when the store lives at $XDG_DATA_HOME/greyproxy. This would fail if
-// SensitiveGreyproxyFiles() stopped honoring XDG (the per-file /dev/null masks
-// would silently no-op).
+// relocation: the store must still be masked when it lives at $XDG_DATA_HOME.
 func TestWrapCommandLinux_GreyproxyMaskWithXDGDataHome(t *testing.T) {
 	home := t.TempDir()
 	xdg := t.TempDir()
@@ -308,9 +271,8 @@ func TestWrapCommandLinux_GreyproxyMaskWithXDGDataHome(t *testing.T) {
 	assertGreyproxyMaskWins(t, parseBwrapMounts(cmd), dataDir)
 }
 
-// TestSensitiveGreyproxyPathsHonorXDG asserts the path helpers include the
-// XDG_DATA_HOME location for both dirs and per-file secrets, so dir and file
-// masks cannot diverge.
+// TestSensitiveGreyproxyPathsHonorXDG asserts both helpers include the
+// XDG_DATA_HOME location, so dir and file masks can't diverge.
 func TestSensitiveGreyproxyPathsHonorXDG(t *testing.T) {
 	home := t.TempDir()
 	xdg := t.TempDir()
@@ -338,15 +300,10 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
-// TestWrapCommandLinux_GreyproxySecretsUnreadableAtRuntime complements the
-// command-string assertions with REAL bubblewrap enforcement: it executes the
-// generated sandbox and, from inside it, reads each greyproxy path. The seeded
-// files each contain "x", so a masked path reads empty and a re-exposed one
-// reads "x". It asserts session.key / ca-key.pem / greyproxy.db are empty
-// (masked) while the public ca-cert.pem is readable (TLS trust preserved).
-//
-// Per repo convention for runtime sandbox tests, it skips when bwrap is absent
-// or cannot create user namespaces (e.g. unprivileged CI).
+// TestWrapCommandLinux_GreyproxySecretsUnreadableAtRuntime runs real bubblewrap
+// and reads each path from inside the sandbox. Seeded files contain "x", so a
+// masked path reads empty and a re-exposed one reads "x". Skips when bwrap can't
+// create a namespace (e.g. unprivileged CI), per repo convention.
 func TestWrapCommandLinux_GreyproxySecretsUnreadableAtRuntime(t *testing.T) {
 	if os.Getenv("GREYWALL_SANDBOX") == "1" {
 		t.Skip("skipping: already running inside a sandbox")

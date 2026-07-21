@@ -735,13 +735,9 @@ func WarnMaskedEnvFiles(cwd string) {
 	}
 }
 
-// SensitiveGreyproxyFiles returns paths to greyproxy files that must not be
-// readable from inside the sandbox (encryption key and CA private key).
-//
-// The list is derived from SensitiveGreyproxyDirs so the per-file deny-READ
-// masks can never drift from the directory masks (e.g. when XDG_DATA_HOME
-// relocates the data dir). See SensitiveGreyproxyDirs for how the candidate
-// directories are resolved.
+// SensitiveGreyproxyFiles returns the greyproxy secret files (session key, CA
+// private key) that must not be readable from inside the sandbox. Derived from
+// SensitiveGreyproxyDirs so file and directory masks can't drift.
 func SensitiveGreyproxyFiles() []string {
 	var files []string
 	for _, dir := range SensitiveGreyproxyDirs() {
@@ -753,35 +749,22 @@ func SensitiveGreyproxyFiles() []string {
 	return files
 }
 
-// SensitiveGreyproxyDirs returns greyproxy data directories whose entire
-// contents must not be readable from inside the sandbox: the encrypted
-// credential store (greyproxy.db and its -wal/-shm side files), the session
-// encryption key, the CA private key, and any proxied request/response logs.
+// SensitiveGreyproxyDirs returns the greyproxy data directories whose contents
+// must not be readable from inside the sandbox (encrypted store, session key, CA
+// private key, proxied logs). The public ca-cert.pem is re-exposed separately.
 //
-// Only the public CA certificate (ca-cert.pem) inside these directories is
-// legitimately needed inside the sandbox (for TLS trust); it is re-exposed
-// separately by the sandbox backend.
-//
-// The XDG_DATA_HOME override is resolved INDEPENDENTLY of the home directory:
-// greyproxy (and greyproxyCACertPath) locate the data dir via $XDG_DATA_HOME
-// without needing HOME, so credential substitution can be active while HOME is
-// unset (common in containers / CI / systemd units). Returning early on a home
-// lookup error would then leave the store unmasked while it is still in use — a
-// fail-open leak. We therefore always append the XDG path when set, and only the
-// home-derived defaults depend on the home lookup succeeding.
+// XDG_DATA_HOME is resolved independently of HOME: greyproxy locates the store
+// via $XDG_DATA_HOME without HOME, so a home-lookup error must not drop the mask
+// while substitution is active (that would fail open).
 func SensitiveGreyproxyDirs() []string {
 	var dirs []string
 
 	if home, err := os.UserHomeDir(); err == nil {
 		dirs = append(dirs,
-			// Linux (default XDG data home)
-			filepath.Join(home, ".local", "share", "greyproxy"),
-			// macOS
-			filepath.Join(home, "Library", "Application Support", "greyproxy"),
+			filepath.Join(home, ".local", "share", "greyproxy"),                // Linux default
+			filepath.Join(home, "Library", "Application Support", "greyproxy"), // macOS
 		)
 	}
-
-	// Honor an explicit XDG_DATA_HOME override (resolvable without HOME).
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		dirs = append(dirs, filepath.Join(xdg, "greyproxy"))
 	}
