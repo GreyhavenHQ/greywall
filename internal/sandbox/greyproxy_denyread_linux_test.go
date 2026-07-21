@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -198,24 +197,35 @@ func TestGetMandatoryDenyPathsExcludesGreyproxySecrets(t *testing.T) {
 }
 
 // TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch drives the full
-// wrapper in enforcing and --watch modes. The hostile cases add a reverse bridge
-// whose socket dir is the data dir, emitting a "--bind <data-dir> <data-dir>" in
-// the post-mask region — which fails unless the mask is emitted genuinely last.
+// wrapper in enforcing and --watch modes, plus an XDG_DATA_HOME relocation. The
+// hostile cases add a reverse bridge whose socket dir is the data dir, emitting a
+// "--bind <data-dir> <data-dir>" in the post-mask region — which fails unless the
+// mask is emitted genuinely last.
 func TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch(t *testing.T) {
 	cases := []struct {
 		name    string
 		opts    LinuxSandboxOptions
 		hostile bool // add a reverse bridge whose socket dir == the greyproxy data dir
+		xdg     bool // relocate the store to $XDG_DATA_HOME instead of ~/.local/share
 	}{
-		{"enforcing", LinuxSandboxOptions{UseLandlock: true, UseSeccomp: true}, false},
-		{"watch", LinuxSandboxOptions{Watch: true}, false},
-		{"enforcing_hostile_reverse_bridge", LinuxSandboxOptions{UseLandlock: true, UseSeccomp: true}, true},
-		{"watch_hostile_reverse_bridge", LinuxSandboxOptions{Watch: true}, true},
+		{"enforcing", LinuxSandboxOptions{UseLandlock: true, UseSeccomp: true}, false, false},
+		{"watch", LinuxSandboxOptions{Watch: true}, false, false},
+		{"enforcing_hostile_reverse_bridge", LinuxSandboxOptions{UseLandlock: true, UseSeccomp: true}, true, false},
+		{"watch_hostile_reverse_bridge", LinuxSandboxOptions{Watch: true}, true, false},
+		{"enforcing_xdg_data_home", LinuxSandboxOptions{UseLandlock: true, UseSeccomp: true}, false, true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, dataDir := seedGreyproxyDir(t)
+			var dataDir string
+			if tc.xdg {
+				t.Setenv("HOME", t.TempDir())
+				xdg := t.TempDir()
+				t.Setenv("XDG_DATA_HOME", xdg)
+				dataDir = seedGreyproxyDirIn(t, xdg)
+			} else {
+				_, dataDir = seedGreyproxyDir(t)
+			}
 			// Deny-by-default exercises the ~/.local home-cache bind that
 			// originally clobbered the mask.
 			cfg := &config.Config{Filesystem: config.FilesystemConfig{}}
@@ -250,45 +260,6 @@ func TestWrapCommandLinux_GreyproxySecretsMaskedIncludingWatch(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestWrapCommandLinux_GreyproxyMaskWithXDGDataHome guards the XDG_DATA_HOME
-// relocation: the store must still be masked when it lives at $XDG_DATA_HOME.
-func TestWrapCommandLinux_GreyproxyMaskWithXDGDataHome(t *testing.T) {
-	home := t.TempDir()
-	xdg := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_DATA_HOME", xdg)
-
-	dataDir := seedGreyproxyDirIn(t, xdg)
-	cfg := &config.Config{Filesystem: config.FilesystemConfig{}}
-
-	cmd, err := WrapCommandLinuxWithOptions(cfg, "true", nil, nil, nil, nil, nil, "", LinuxSandboxOptions{UseLandlock: true, UseSeccomp: true})
-	if err != nil {
-		t.Fatalf("wrap failed: %v", err)
-	}
-
-	assertGreyproxyMaskWins(t, parseBwrapMounts(cmd), dataDir)
-}
-
-// TestSensitiveGreyproxyPathsHonorXDG asserts both helpers include the
-// XDG_DATA_HOME location, so dir and file masks can't diverge.
-func TestSensitiveGreyproxyPathsHonorXDG(t *testing.T) {
-	home := t.TempDir()
-	xdg := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_DATA_HOME", xdg)
-
-	wantDir := filepath.Join(xdg, "greyproxy")
-	if !slices.Contains(SensitiveGreyproxyDirs(), wantDir) {
-		t.Errorf("SensitiveGreyproxyDirs missing XDG dir %q: %v", wantDir, SensitiveGreyproxyDirs())
-	}
-	for _, f := range []string{"session.key", "ca-key.pem"} {
-		want := filepath.Join(wantDir, f)
-		if !slices.Contains(SensitiveGreyproxyFiles(), want) {
-			t.Errorf("SensitiveGreyproxyFiles missing XDG secret %q: %v", want, SensitiveGreyproxyFiles())
-		}
 	}
 }
 

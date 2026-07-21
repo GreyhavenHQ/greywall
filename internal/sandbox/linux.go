@@ -805,17 +805,13 @@ func getMandatoryDenyPaths(cwd string) []string {
 }
 
 // greyproxyDenyReadArgs returns bwrap args that make greyproxy's private state
-// unreadable while keeping the public ca-cert.pem readable for TLS trust.
+// unreadable while re-exposing the public ca-cert.pem for TLS trust. Secrets
+// need deny-READ (mask with /dev/null or tmpfs), not deny-WRITE (--ro-bind
+// realfile realfile leaves them readable), and MUST be appended last so
+// bubblewrap's "last mount wins" keeps the mask.
 //
-// Secrets need deny-READ (mask with /dev/null or tmpfs), not the deny-WRITE
-// idiom (--ro-bind realfile realfile) which leaves them readable. These args
-// MUST be appended after every other bind so bubblewrap's "last mount wins"
-// keeps the mask (see the call site).
-//
-// Symlink limitation: masks act on logical paths, so a data dir/secret
-// symlinked to a separately-exposed target could stay readable. Not reachable
-// in the standard deployment (greyproxy writes real files); left as upstream
-// hardening (EvalSymlinks the paths).
+// Known limitation: a symlinked data dir/secret pointing at a separately-exposed
+// target could stay readable (not reachable in the standard deployment).
 func greyproxyDenyReadArgs() []string {
 	var args []string
 
@@ -1480,12 +1476,10 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		bwrapArgs = append(bwrapArgs, "--ro-bind", greywallExePath, greywallExePath)
 	}
 
-	// Mask greyproxy's private state. Gated on "not learning" (substitution is
-	// off only in learning mode) so it also covers --watch, which skips the
-	// deny block above. MUST stay the last filesystem-mount block: bubblewrap's
-	// "last mount wins" is what stops any earlier bind — including a hostile
-	// bridge socket path inside the data dir — from re-exposing the secrets. Do
-	// not append further binds after this; only "--" and the inner script follow.
+	// Mask greyproxy's private state. MUST stay the last filesystem-mount block —
+	// "last mount wins" is what stops an earlier bind (or a hostile bridge socket
+	// inside the data dir) from re-exposing the secrets, so don't append binds
+	// after this. Gated on "not learning" so it also covers --watch.
 	if !opts.Learning {
 		bwrapArgs = append(bwrapArgs, greyproxyDenyReadArgs()...)
 	}
