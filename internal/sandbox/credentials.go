@@ -741,7 +741,8 @@ func WarnMaskedEnvFiles(cwd string) {
 func SensitiveGreyproxyFiles() []string {
 	var files []string
 	for _, dir := range SensitiveGreyproxyDirs() {
-		files = append(files,
+		files = append(
+			files,
 			filepath.Join(dir, "session.key"),
 			filepath.Join(dir, "ca-key.pem"),
 		)
@@ -760,7 +761,8 @@ func SensitiveGreyproxyDirs() []string {
 	var dirs []string
 
 	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs,
+		dirs = append(
+			dirs,
 			filepath.Join(home, ".local", "share", "greyproxy"),                // Linux default
 			filepath.Join(home, "Library", "Application Support", "greyproxy"), // macOS
 		)

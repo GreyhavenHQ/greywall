@@ -19,7 +19,7 @@ import (
 func seedGreyproxyDirIn(t *testing.T, parent string) string {
 	t.Helper()
 	dataDir := filepath.Join(parent, "greyproxy")
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		t.Fatalf("mkdir data dir: %v", err)
 	}
 	for _, f := range []string{"session.key", "ca-key.pem", "ca-cert.pem", "greyproxy.db"} {
@@ -320,7 +320,7 @@ func TestWrapCommandLinux_GreyproxySecretsUnreadableAtRuntime(t *testing.T) {
 		t.Fatalf("wrap: %v", err)
 	}
 
-	out, runErr := exec.Command("bash", "-c", cmd).CombinedOutput()
+	out, runErr := exec.Command("bash", "-c", cmd).CombinedOutput() //nolint:gosec // test runs the greywall-generated sandbox command
 	got := string(out)
 
 	// If bubblewrap can't stand up a namespace here, skip rather than fail.
