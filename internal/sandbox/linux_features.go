@@ -31,9 +31,10 @@ type LinuxFeatures struct {
 	HasCapBPF  bool
 	HasCapRoot bool
 
-	// Network namespace capability
-	// This can be false in containerized environments (Docker, CI) without CAP_NET_ADMIN
-	CanUnshareNet bool
+	// Network namespace capabilities
+	// These can be restricted independently by AppArmor and container runtimes.
+	CanUnshareNet bool // bwrap can create a network namespace
+	CanAdminNet   bool // a bwrap child retains CAP_NET_ADMIN in that namespace
 
 	// Transparent proxy support
 	HasIpCommand bool // ip (iproute2) available
@@ -77,14 +78,16 @@ func (f *LinuxFeatures) detect() {
 	// Check eBPF capabilities
 	f.detectEBPF()
 
-	// Check if we can create network namespaces
-	f.detectNetworkNamespace()
-
-	// Check transparent proxy support
+	// Check transparent proxy prerequisites before probing whether a child can
+	// administer its network namespace. AppArmor can allow namespace creation
+	// while stripping CAP_NET_ADMIN from the executable launched by bwrap.
 	f.HasIpCommand = commandExists("ip")
 	_, err := os.Stat("/dev/net/tun")
 	f.HasDevNetTun = err == nil
 	f.HasTun2Socks = true // embedded binary, always available
+
+	f.detectNetworkNamespace()
+	f.detectNetworkAdministration()
 }
 
 func (f *LinuxFeatures) parseKernelVersion() {
@@ -219,8 +222,33 @@ func (f *LinuxFeatures) detectNetworkNamespace() {
 	}
 
 	cmd := exec.Command("bwrap", "--unshare-net", "--ro-bind", "/", "/", "--", truePath) //nolint:gosec
-	err = cmd.Run()
-	f.CanUnshareNet = err == nil
+	f.CanUnshareNet = cmd.Run() == nil
+}
+
+// detectNetworkAdministration probes the exact child-side capability Greywall
+// needs to create its transparent proxy. Ubuntu's bwrap AppArmor profile can
+// allow --unshare-net while denying CAP_NET_ADMIN after bwrap execs its child.
+func (f *LinuxFeatures) detectNetworkAdministration() {
+	if !f.CanUnshareNet || !f.HasIpCommand || !f.HasDevNetTun {
+		return
+	}
+
+	ipPath, err := exec.LookPath("ip")
+	if err != nil {
+		return
+	}
+
+	// Creating a disposable TUN interface tests both CAP_NET_ADMIN and
+	// TUNSETIFF access. The namespace is destroyed when the probe exits.
+	cmd := exec.Command( //nolint:gosec
+		"bwrap",
+		"--unshare-net",
+		"--ro-bind", "/", "/",
+		"--dev-bind", "/dev/net/tun", "/dev/net/tun",
+		"--cap-add", "CAP_NET_ADMIN",
+		"--", ipPath, "tuntap", "add", "dev", "greywall-probe0", "mode", "tun",
+	)
+	f.CanAdminNet = cmd.Run() == nil
 }
 
 // Summary returns a human-readable summary of available features.
@@ -274,7 +302,7 @@ func (f *LinuxFeatures) CanUseLandlock() bool {
 
 // CanUseTransparentProxy returns true if transparent proxying via tun2socks is possible.
 func (f *LinuxFeatures) CanUseTransparentProxy() bool {
-	return f.HasIpCommand && f.HasDevNetTun && f.CanUnshareNet
+	return f.HasIpCommand && f.HasDevNetTun && f.CanUnshareNet && f.CanAdminNet
 }
 
 // MinimumViable returns true if the minimum required features are available.
@@ -356,21 +384,14 @@ func PrintDependencyStatus() []string {
 		}
 		if !features.CanUnshareNet {
 			missing = append(missing, "network namespace")
+		} else if !features.CanAdminNet {
+			missing = append(missing, "CAP_NET_ADMIN/TUN access")
 		}
-		if len(missing) > 0 {
-			fmt.Println(CheckFail(fmt.Sprintf("network isolation (missing: %s)", strings.Join(missing, ", "))))
+		fmt.Println(CheckFail(fmt.Sprintf("transparent network proxy (unavailable: %s)", strings.Join(missing, ", "))))
+		if features.CanUnshareNet {
+			fmt.Println(CheckOK("network namespace isolation (proxy-aware applications use environment variables)"))
 		} else {
-			fmt.Println(CheckFail("network isolation"))
-		}
-
-		if !features.CanUnshareNet && features.HasBwrap {
-			if val := readSysctl("kernel/apparmor_restrict_unprivileged_userns"); val == "1" {
-				steps = append(
-					steps,
-					"sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
-					"echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-greywall-userns.conf",
-				)
-			}
+			fmt.Println(CheckFail("network namespace isolation — direct network access is not contained"))
 		}
 	}
 
@@ -441,14 +462,6 @@ func suggestInstallSecretTool() string {
 	default:
 		return "install libsecret-tools (provides secret-tool) using your package manager"
 	}
-}
-
-func readSysctl(name string) string {
-	data, err := os.ReadFile("/proc/sys/" + name) //nolint:gosec // reading sysctl values - trusted kernel path
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
 }
 
 func commandExists(name string) bool {

@@ -21,27 +21,18 @@ This is a macOS kernel limitation - nested Seatbelt sandboxes are not allowed. T
 
 ## "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted" (Linux)
 
-This error occurs when greywall tries to create a network namespace but the environment lacks the `CAP_NET_ADMIN` capability. This is common in:
+This error occurs when the environment prevents Greywall's Bubblewrap child from administering its network namespace. This is common in:
 
 - **Docker containers** (unless run with `--privileged` or `--cap-add=NET_ADMIN`)
 - **GitHub Actions** and other CI runners
-- **Ubuntu 24.04+** with restrictive AppArmor policies
+- **Ubuntu 24.04+** where AppArmor allows Bubblewrap to create namespaces but removes child capabilities
 - **Kubernetes pods** without elevated security contexts
 
 **What happens now:**
 
-Greywall automatically detects this limitation and falls back to running **without network namespace isolation**. The sandbox still provides:
+Greywall probes both namespace creation and child-side TUN access. If TUN setup is unavailable but the network namespace works, Greywall keeps the namespace and uses `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` instead. Programs that honor those variables can reach the configured proxy; programs that ignore them remain blocked by the namespace.
 
-- Filesystem restrictions (read-only root, allowWrite paths)
-- PID namespace isolation
-- Seccomp syscall filtering
-- Landlock (if available)
-
-**What's reduced:**
-
-- Network isolation via namespace is skipped
-- Proxy-based routing still works (via `HTTP_PROXY`/`HTTPS_PROXY` env vars)
-- But programs that bypass proxy env vars won't be network-isolated
+If the network namespace itself is unavailable, Greywall retains its filesystem, PID, seccomp, and Landlock restrictions, but direct network access is not contained. `greywall check` reports this weaker state explicitly.
 
 **To check if your environment supports network namespaces:**
 
@@ -51,23 +42,12 @@ greywall --linux-features
 
 Look for "Network namespace (--unshare-net): true/false"
 
-**Solutions if you need full network isolation:**
+**Solutions if you need transparent proxying:**
 
-1. **Run with elevated privileges:**
-
-   ```bash
-   sudo greywall <command>
-   ```
-
-2. **In Docker, add capability:**
-
-   ```bash
-   docker run --cap-add=NET_ADMIN ...
-   ```
-
-3. **In GitHub Actions**, this typically isn't possible without self-hosted runners with elevated permissions.
-
-4. **On Ubuntu 24.04+**, you may need to modify AppArmor profiles (see [Ubuntu bug 2069526](https://bugs.launchpad.net/bugs/2069526)).
+1. Prefer an application that honors standard proxy environment variables; the network namespace still prevents bypass.
+2. In containers, grant `NET_ADMIN` only to the container running Greywall when that is acceptable for your threat model.
+3. In CI, use a self-hosted runner whose sandbox policy supports child-side TUN administration.
+4. On Ubuntu 24.04+, use a narrowly scoped AppArmor policy reviewed for your deployment. Do not disable AppArmor's unprivileged-user-namespace restriction globally.
 
 ## "bwrap: setting up uid map: Permission denied" (Linux)
 
