@@ -1727,6 +1727,7 @@ func PrintLinuxFeatures() {
 	fmt.Printf("  Bubblewrap (bwrap): %v\n", features.HasBwrap)
 	fmt.Printf("  Socat: %v\n", features.HasSocat)
 	fmt.Printf("  Network namespace (--unshare-net): %v\n", features.CanUnshareNet)
+	fmt.Printf("  Network administration (TUN/CAP_NET_ADMIN): %v\n", features.CanAdminNet)
 	fmt.Printf("  Seccomp: %v (log level: %d)\n", features.HasSeccomp, features.SeccompLogLevel)
 	fmt.Printf("  Landlock: %v (ABI v%d)\n", features.HasLandlock, features.LandlockABI)
 	fmt.Printf("  eBPF: %v (CAP_BPF: %v, root: %v)\n", features.HasEBPF, features.HasCapBPF, features.HasCapRoot)
@@ -1759,7 +1760,10 @@ func PrintLinuxFeatures() {
 	if features.CanUseTransparentProxy() {
 		fmt.Printf("  ✓ Transparent proxy available (tun2socks + TUN device)\n")
 	} else {
-		fmt.Printf("  ○ Transparent proxy not available (needs ip, /dev/net/tun, network namespace)\n")
+		fmt.Printf("  ○ Transparent proxy not available (needs ip, /dev/net/tun, network namespace, and child CAP_NET_ADMIN)\n")
+		if features.CanUnshareNet {
+			fmt.Printf("    Proxy-aware applications will use HTTP_PROXY/HTTPS_PROXY/ALL_PROXY instead.\n")
+		}
 	}
 
 	if features.CanUseLandlock() {

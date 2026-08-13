@@ -21,6 +21,7 @@ type LinuxFeatures struct {
 	HasCapBPF       bool
 	HasCapRoot      bool
 	CanUnshareNet   bool
+	CanAdminNet     bool
 	HasIpCommand    bool
 	HasDevNetTun    bool
 	HasTun2Socks    bool
