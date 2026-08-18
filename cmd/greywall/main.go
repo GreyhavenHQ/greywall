@@ -3,6 +3,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -169,6 +170,11 @@ Configuration file format:
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		exitCode = 1
+		// Distinguish "greywall refused to run" from a failure of the
+		// sandboxed command, so callers and CI can tell the two apart.
+		if errors.Is(err, sandbox.ErrNetworkNotIsolated) {
+			exitCode = sandbox.ExitNetworkNotIsolated
+		}
 	}
 	os.Exit(exitCode)
 }
