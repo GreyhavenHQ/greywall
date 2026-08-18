@@ -32,7 +32,7 @@ This error occurs when the environment prevents Greywall's Bubblewrap child from
 
 Greywall probes both namespace creation and child-side TUN access. If TUN setup is unavailable but the network namespace works, Greywall keeps the namespace and uses `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` instead. Programs that honor those variables can reach the configured proxy; programs that ignore them remain blocked by the namespace.
 
-If the network namespace itself is unavailable, Greywall retains its filesystem, PID, seccomp, and Landlock restrictions, but direct network access is not contained. `greywall check` reports this weaker state explicitly.
+If the network namespace itself is unavailable, Greywall **refuses to run** and exits with code `78`. Nothing would contain network access in that state: the sandboxed command could reach any destination, including services on `127.0.0.1` and cloud instance metadata endpoints. Grant `NET_ADMIN` to the container (`docker run --cap-add=NET_ADMIN`) to fix it. `greywatch` is exempt and warns instead, being allow-by-default observability.
 
 **To check if your environment supports network namespaces:**
 
@@ -44,7 +44,7 @@ Look for "Network namespace (--unshare-net): true/false"
 
 **Solutions if you need transparent proxying:**
 
-1. Prefer an application that honors standard proxy environment variables; the network namespace still prevents bypass.
+1. Prefer an application that honors standard proxy environment variables. This is the primary path in any case — a SOCKS5 client sends the hostname to the proxy, so policy is applied against the name the client asked for, whereas TUN can only infer the destination from packets.
 2. In containers, grant `NET_ADMIN` only to the container running Greywall when that is acceptable for your threat model.
 3. In CI, use a self-hosted runner whose sandbox policy supports child-side TUN administration.
 4. On Ubuntu 24.04+, use a narrowly scoped AppArmor policy reviewed for your deployment. Do not disable AppArmor's unprivileged-user-namespace restriction globally.

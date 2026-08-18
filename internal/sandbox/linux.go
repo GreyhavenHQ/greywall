@@ -1087,6 +1087,34 @@ func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBrid
 }
 
 // WrapCommandLinuxWithOptions wraps a command with configurable sandbox options.
+// detectFeatures is a seam for tests; production always uses the cached
+// detection. Tests replace it to exercise environments that cannot be
+// reproduced on the host running them, such as a missing network namespace.
+var detectFeatures = DetectLinuxFeatures
+
+// networkEnforcementError reports that the sandbox has no way to contain
+// network access.
+//
+// The network namespace is the containment boundary. Proxy environment
+// variables route cooperative programs through the proxy, but they are
+// advisory: only the namespace stops a program that ignores them. With neither,
+// nothing is enforced, and a deny-by-default sandbox must refuse rather than
+// present the appearance of containment.
+//
+// Watch mode is exempt — it is allow-by-default observability, not a sandbox.
+func networkEnforcementError(features *LinuxFeatures, watch bool) error {
+	if features.CanUnshareNet || watch {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w.\nThe sandboxed command would share the host network and could reach any destination, "+
+			"including services on 127.0.0.1 and cloud instance metadata endpoints.\n"+
+			"This usually means greywall is running inside a container without CAP_NET_ADMIN; "+
+			"add --cap-add=NET_ADMIN to the container.\n"+
+			"Run 'greywall --linux-features' to inspect this environment",
+		ErrNetworkNotIsolated)
+}
+
 func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, forwardBridge *ForwardBridge, dbusBridge *DbusBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		return "", fmt.Errorf("bubblewrap (bwrap) is required on Linux but not found: %w", err)
@@ -1107,7 +1135,7 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	}
 
 	cwd, _ := os.Getwd()
-	features := DetectLinuxFeatures()
+	features := detectFeatures()
 
 	if opts.Debug {
 		fmt.Fprintf(os.Stderr, "[greywall:linux] Available features: %s\n", features.Summary())
@@ -1125,12 +1153,16 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	// mitigates is instead blocked by our seccomp filter (see linux_seccomp.go).
 	bwrapArgs = append(bwrapArgs, "--die-with-parent")
 
-	// Always use --unshare-net when available (network namespace isolation)
-	// Inside the namespace, tun2socks will provide transparent proxy access
-	if features.CanUnshareNet {
+	if err := networkEnforcementError(features, opts.Watch); err != nil {
+		return "", err
+	}
+	switch {
+	case features.CanUnshareNet:
 		bwrapArgs = append(bwrapArgs, "--unshare-net") // Network namespace isolation
-	} else if opts.Debug {
-		fmt.Fprintf(os.Stderr, "[greywall:linux] Skipping --unshare-net (network namespace unavailable in this environment)\n")
+	case opts.Watch:
+		// Watch mode is allow-by-default observability, not containment.
+		fmt.Fprintf(os.Stderr,
+			"greywall: warning: no network namespace available; traffic is not contained.\n")
 	}
 
 	bwrapArgs = append(bwrapArgs, "--unshare-pid") // PID namespace isolation
@@ -1461,57 +1493,18 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		fmt.Fprintf(&innerScript, "export REQUESTS_CA_BUNDLE=%s\n", ShellQuoteSingle(caCertPath))
 	}
 
-	if proxyBridge != nil && tun2socksPath != "" && features.CanUseTransparentProxy() {
-		// Build the tun2socks proxy URL with credentials if available
-		// Many SOCKS5 proxies require the username/password auth flow even
-		// without real credentials (e.g., gost always selects method 0x02).
-		// Including userinfo ensures tun2socks offers both auth methods.
-		tun2socksProxyURL := "socks5://127.0.0.1:${PROXY_PORT}"
-		if proxyBridge.HasAuth {
-			userinfo := url.UserPassword(proxyBridge.ProxyUser, proxyBridge.ProxyPass)
-			tun2socksProxyURL = fmt.Sprintf("socks5://%s@127.0.0.1:${PROXY_PORT}", userinfo.String())
-		}
-
-		// Set up transparent proxy via TUN device + tun2socks
+	if proxyBridge != nil {
+		// The SOCKS5 bridge and proxy environment variables are the primary
+		// path, not a fallback. A cooperative client speaking socks5h sends the
+		// hostname to the proxy, so policy is applied against the name the
+		// client actually asked for. TUN, below, can only observe packets and
+		// must infer the destination.
 		fmt.Fprintf(&innerScript, `
-# Bring up loopback interface (needed for socat to bind on 127.0.0.1)
-ip link set lo up
-
-# Set up TUN device for transparent proxying
-ip tuntap add dev tun0 mode tun
-ip addr add 198.18.0.1/15 dev tun0
-ip link set dev tun0 up
-ip route add default via 198.18.0.1 dev tun0
-
-# Bridge: local port -> Unix socket -> host -> external SOCKS5 proxy
-PROXY_PORT=18321
-socat TCP-LISTEN:${PROXY_PORT},fork,reuseaddr,bind=127.0.0.1 UNIX-CONNECT:%s >/dev/null 2>&1 &
-BRIDGE_PID=$!
-
-# Start tun2socks (transparent proxy via gvisor netstack)
-/tmp/greywall-tun2socks -device tun0 -proxy %s >/dev/null 2>&1 &
-TUN2SOCKS_PID=$!
-
-`, proxyBridge.SocketPath, tun2socksProxyURL)
-
-		// DNS relay: only needed when using a dedicated DNS bridge.
-		// When using tun2socks without a DNS bridge, resolv.conf is configured with
-		// "options use-vc" to force TCP DNS, which tun2socks handles natively.
-		if dnsBridge != nil {
-			// Dedicated DNS bridge: UDP :53 -> Unix socket -> host DNS server
-			fmt.Fprintf(&innerScript, `# DNS relay: UDP queries -> Unix socket -> host DNS server (%s)
-socat UDP4-RECVFROM:53,fork,reuseaddr UNIX-CONNECT:%s >/dev/null 2>&1 &
-DNS_RELAY_PID=$!
-
-`, dnsBridge.DnsAddr, dnsBridge.SocketPath)
-		}
-	} else if proxyBridge != nil {
-		// Fallback: no TUN support, use env-var-based proxying
-		fmt.Fprintf(&innerScript, `
-# Bring up loopback interface (needed for socat to bind on 127.0.0.1)
+# Bring up loopback interface (needed for socat to bind on 127.0.0.1).
+# bwrap normally does this already; ignore failure when we lack CAP_NET_ADMIN.
 ip link set lo up 2>/dev/null
 
-# Set up SOCKS5 bridge (no TUN available, env-var-based proxying)
+# Bridge: local port -> Unix socket -> host -> external SOCKS5 proxy
 PROXY_PORT=18321
 socat TCP-LISTEN:${PROXY_PORT},fork,reuseaddr,bind=127.0.0.1 UNIX-CONNECT:%s >/dev/null 2>&1 &
 BRIDGE_PID=$!
@@ -1526,6 +1519,46 @@ export NO_PROXY=localhost,127.0.0.1
 export no_proxy=localhost,127.0.0.1
 
 `, proxyBridge.SocketPath)
+	}
+
+	if proxyBridge != nil && tun2socksPath != "" && features.CanUseTransparentProxy() {
+		// Build the tun2socks proxy URL with credentials if available
+		// Many SOCKS5 proxies require the username/password auth flow even
+		// without real credentials (e.g., gost always selects method 0x02).
+		// Including userinfo ensures tun2socks offers both auth methods.
+		tun2socksProxyURL := "socks5://127.0.0.1:${PROXY_PORT}"
+		if proxyBridge.HasAuth {
+			userinfo := url.UserPassword(proxyBridge.ProxyUser, proxyBridge.ProxyPass)
+			tun2socksProxyURL = fmt.Sprintf("socks5://%s@127.0.0.1:${PROXY_PORT}", userinfo.String())
+		}
+
+		// Backstop: a default route through tun0 catches traffic from programs
+		// that ignore the proxy variables above. Where this is unavailable those
+		// programs simply have no route out, which is the intended outcome.
+		fmt.Fprintf(&innerScript, `
+# Set up TUN device to catch traffic from proxy-unaware programs
+ip tuntap add dev tun0 mode tun
+ip addr add 198.18.0.1/15 dev tun0
+ip link set dev tun0 up
+ip route add default via 198.18.0.1 dev tun0
+
+# Start tun2socks (transparent proxy via gvisor netstack)
+/tmp/greywall-tun2socks -device tun0 -proxy %s >/dev/null 2>&1 &
+TUN2SOCKS_PID=$!
+
+`, tun2socksProxyURL)
+
+		// DNS relay: only needed when using a dedicated DNS bridge.
+		// When using tun2socks without a DNS bridge, resolv.conf is configured with
+		// "options use-vc" to force TCP DNS, which tun2socks handles natively.
+		if dnsBridge != nil {
+			// Dedicated DNS bridge: UDP :53 -> Unix socket -> host DNS server
+			fmt.Fprintf(&innerScript, `# DNS relay: UDP queries -> Unix socket -> host DNS server (%s)
+socat UDP4-RECVFROM:53,fork,reuseaddr UNIX-CONNECT:%s >/dev/null 2>&1 &
+DNS_RELAY_PID=$!
+
+`, dnsBridge.DnsAddr, dnsBridge.SocketPath)
+		}
 	}
 
 	// Set up reverse (inbound) socat listeners inside the sandbox
