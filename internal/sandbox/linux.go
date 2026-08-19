@@ -797,10 +797,42 @@ func getMandatoryDenyPaths(cwd string) []string {
 		}
 	}
 
-	// Sensitive system files (greyproxy encryption key, CA private key)
-	paths = append(paths, GetSensitiveSystemPaths()...)
+	// greyproxy secrets are NOT added here: this set feeds the deny-WRITE idiom
+	// (--ro-bind realfile realfile), which leaves the file readable — fatal for
+	// secrets. They get deny-READ treatment in greyproxyDenyReadArgs() instead.
 
 	return paths
+}
+
+// greyproxyDenyReadArgs returns bwrap args that make greyproxy's private state
+// unreadable while re-exposing the public ca-cert.pem for TLS trust. Secrets
+// need deny-READ (mask with /dev/null or tmpfs), not deny-WRITE (--ro-bind
+// realfile realfile leaves them readable), and MUST be appended last so
+// bubblewrap's "last mount wins" keeps the mask.
+//
+// Known limitation: a symlinked data dir/secret pointing at a separately-exposed
+// target could stay readable (not reachable in the standard deployment).
+func greyproxyDenyReadArgs() []string {
+	var args []string
+
+	// tmpfs the whole data dir: hides the store, keys, and proxied logs at once.
+	for _, dir := range SensitiveGreyproxyDirs() {
+		if isDirectory(dir) {
+			args = append(args, "--tmpfs", dir)
+		}
+	}
+	// Defense in depth: mask each secret file individually.
+	for _, p := range SensitiveGreyproxyFiles() {
+		if fileExists(p) && canMountOver(p) {
+			args = append(args, "--ro-bind", "/dev/null", p)
+		}
+	}
+	// Re-expose only the public CA cert, last so it wins over the tmpfs.
+	if certPath := greyproxyCACertPath(); certPath != "" {
+		args = append(args, "--ro-bind", certPath, certPath)
+	}
+
+	return args
 }
 
 // buildDenyByDefaultMounts builds bwrap arguments for deny-by-default filesystem isolation.
@@ -1442,6 +1474,14 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 	// because the binary path doesn't exist inside the sandbox.
 	if useLandlockWrapper && greywallExePath != "" {
 		bwrapArgs = append(bwrapArgs, "--ro-bind", greywallExePath, greywallExePath)
+	}
+
+	// Mask greyproxy's private state. MUST stay the last filesystem-mount block —
+	// "last mount wins" is what stops an earlier bind (or a hostile bridge socket
+	// inside the data dir) from re-exposing the secrets, so don't append binds
+	// after this. Gated on "not learning" so it also covers --watch.
+	if !opts.Learning {
+		bwrapArgs = append(bwrapArgs, greyproxyDenyReadArgs()...)
 	}
 
 	bwrapArgs = append(bwrapArgs, "--", shellPath, "-c")

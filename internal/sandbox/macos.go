@@ -276,7 +276,7 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 	}
 
 	// Deny sensitive system files (greyproxy encryption key, CA private key)
-	for _, p := range GetSensitiveSystemPaths() {
+	for _, p := range SensitiveGreyproxyFiles() {
 		rules = append(
 			rules,
 			"(deny file-read-data",

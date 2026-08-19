@@ -735,20 +735,41 @@ func WarnMaskedEnvFiles(cwd string) {
 	}
 }
 
-// SensitiveGreyproxyFiles returns paths to greyproxy files that must not be
-// readable from inside the sandbox (encryption key and CA private key).
+// SensitiveGreyproxyFiles returns the greyproxy secret files (session key, CA
+// private key) that must not be readable from inside the sandbox. Derived from
+// SensitiveGreyproxyDirs so file and directory masks can't drift.
 func SensitiveGreyproxyFiles() []string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
+	var files []string
+	for _, dir := range SensitiveGreyproxyDirs() {
+		files = append(
+			files,
+			filepath.Join(dir, "session.key"),
+			filepath.Join(dir, "ca-key.pem"),
+		)
+	}
+	return files
+}
+
+// SensitiveGreyproxyDirs returns the greyproxy data directories whose contents
+// must not be readable from inside the sandbox (encrypted store, session key, CA
+// private key, proxied logs). The public ca-cert.pem is re-exposed separately.
+//
+// XDG_DATA_HOME is resolved independently of HOME: greyproxy locates the store
+// via $XDG_DATA_HOME without HOME, so a home-lookup error must not drop the mask
+// while substitution is active (that would fail open).
+func SensitiveGreyproxyDirs() []string {
+	var dirs []string
+
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(
+			dirs,
+			filepath.Join(home, ".local", "share", "greyproxy"),                // Linux default
+			filepath.Join(home, "Library", "Application Support", "greyproxy"), // macOS
+		)
+	}
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		dirs = append(dirs, filepath.Join(xdg, "greyproxy"))
 	}
 
-	return []string{
-		// Linux
-		home + "/.local/share/greyproxy/session.key",
-		home + "/.local/share/greyproxy/ca-key.pem",
-		// macOS
-		home + "/Library/Application Support/greyproxy/session.key",
-		home + "/Library/Application Support/greyproxy/ca-key.pem",
-	}
+	return dirs
 }
