@@ -52,6 +52,7 @@ type MacOSSandboxParams struct {
 	AllowGitConfig          bool
 	Shell                   string
 	RewrittenEnvFiles       map[string]string // original path -> rewritten temp path
+	SymlinkScan             string            // filesystem.symlinkScan mode ("shallow", "deep", "off")
 }
 
 // GlobToRegex converts a glob pattern to a regex for macOS sandbox profiles.
@@ -153,8 +154,40 @@ func getTmpdirParent() []string {
 	return []string{parent}
 }
 
+// readRuleForPath returns a Seatbelt read-allow rule for a resolved path:
+// subpath for directories, literal for files.
+func readRuleForPath(p string) []string {
+	kind := "literal"
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		kind = "subpath"
+	}
+	return []string{
+		"(allow file-read-data",
+		fmt.Sprintf("  (%s %s))", kind, escapePath(p)),
+	}
+}
+
+// escapingSymlinkReadRules returns read-allow rules for symlinks under an
+// allowed directory whose targets lie outside it (per filesystem.symlinkScan).
+// Seatbelt evaluates rules against resolved paths, so without these rules a
+// symlink pointing outside the allowed directory is denied.
+func escapingSymlinkReadRules(dir, mode string) []string {
+	if mode == config.SymlinkScanOff {
+		return nil
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	var rules []string
+	for _, entry := range scanEscapingSymlinks(dir, mode == config.SymlinkScanDeep, false) {
+		rules = append(rules, readRuleForPath(entry.Target)...)
+	}
+	return rules
+}
+
 // generateReadRules generates filesystem read rules for the sandbox profile.
-func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths []string, rewrittenEnvFiles map[string]string, logTag string) []string {
+func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths []string, rewrittenEnvFiles map[string]string, logTag, symlinkScan string) []string {
 	var rules []string
 
 	if defaultDenyRead {
@@ -204,6 +237,14 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 					rules,
 					fmt.Sprintf("(allow file-read-data (literal %s))", escapePath(p)),
 				)
+				// Seatbelt matches resolved paths: a symlinked config (e.g.
+				// dotfiles-managed) needs a rule for its target too.
+				if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved != p {
+					rules = append(
+						rules,
+						fmt.Sprintf("(allow file-read-data (literal %s))", escapePath(resolved)),
+					)
+				}
 			}
 
 			// Home tool caches (subpath access for package managers/configs)
@@ -215,6 +256,13 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 					"(allow file-read-data",
 					fmt.Sprintf("  (subpath %s))", escapePath(p)),
 				)
+				if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved != p {
+					rules = append(
+						rules,
+						"(allow file-read-data",
+						fmt.Sprintf("  (subpath %s))", escapePath(resolved)),
+					)
+				}
 			}
 		}
 
@@ -229,12 +277,23 @@ func generateReadRules(defaultDenyRead bool, cwd string, allowPaths, denyPaths [
 					"(allow file-read-data",
 					fmt.Sprintf("  (regex %s))", escapePath(regex)),
 				)
+				// The regex matches the literal path, but Seatbelt evaluates
+				// resolved paths: cover targets of matches that are symlinks,
+				// and symlinks escaping matched directories.
+				for _, m := range ExpandGlobPatterns([]string{pathPattern}) {
+					if entry, ok := resolveSymlinkEntry(m); ok {
+						rules = append(rules, readRuleForPath(entry.Target)...)
+					} else {
+						rules = append(rules, escapingSymlinkReadRules(m, symlinkScan)...)
+					}
+				}
 			} else {
 				rules = append(
 					rules,
 					"(allow file-read-data",
 					fmt.Sprintf("  (subpath %s))", escapePath(normalized)),
 				)
+				rules = append(rules, escapingSymlinkReadRules(normalized, symlinkScan)...)
 			}
 		}
 
@@ -676,7 +735,7 @@ func GenerateSandboxProfile(params MacOSSandboxParams) string {
 
 	// Read rules
 	profile.WriteString("; File read\n")
-	for _, rule := range generateReadRules(params.DefaultDenyRead, params.Cwd, params.ReadAllowPaths, params.ReadDenyPaths, params.RewrittenEnvFiles, logTag) {
+	for _, rule := range generateReadRules(params.DefaultDenyRead, params.Cwd, params.ReadAllowPaths, params.ReadDenyPaths, params.RewrittenEnvFiles, logTag, params.SymlinkScan) {
 		profile.WriteString(rule + "\n")
 	}
 	profile.WriteString("\n")
@@ -776,6 +835,7 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, re
 		AllowPty:                cfg.AllowPty,
 		AllowGitConfig:          cfg.Filesystem.AllowGitConfig,
 		RewrittenEnvFiles:       rewrittenEnvFiles,
+		SymlinkScan:             cfg.Filesystem.SymlinkScanMode(),
 	}
 
 	if debug && len(exposedPorts) > 0 {

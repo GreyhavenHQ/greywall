@@ -115,8 +115,37 @@ Greywall routes all network traffic through an external SOCKS5 proxy. Domain fil
 | `allowWrite` | Paths to allow writing |
 | `denyWrite` | Paths to deny writing (takes precedence over `allowWrite`) |
 | `allowGitConfig` | Allow writes to `.git/config` files |
+| `symlinkScan` | How allowed directories are scanned for symlinks pointing outside them: `"shallow"` (default), `"deep"`, or `"off"` |
 
 To opt out of deny-by-default reads, set `"defaultDenyRead": false`. Use `--learning` mode to automatically discover which paths a command needs. See [Learning Mode](./learning-mode).
+
+### Symlinks in Allowed Paths
+
+Allowed paths that are symlinks work transparently: greywall recreates the link inside the sandbox and exposes its resolved target, so programs can open either the link path or the real path. This covers common dotfiles setups where files like `~/.claude.json` are symlinks into another directory.
+
+Symlinks *inside* an allowed directory that point outside it need their targets exposed too. The `symlinkScan` option controls how greywall finds them:
+
+| Mode | Behavior |
+|------|----------|
+| `shallow` (default) | Scans only the direct entries of each allowed directory. One directory read per allowed path, negligible startup cost. |
+| `deep` | Recursively walks each allowed directory (capped at 10,000 entries per directory). Use when allowed directories contain symlinks in nested subdirectories. Slows startup on large directory trees. |
+| `off` | No scanning. Symlink targets inside allowed directories must be added to `allowRead` explicitly. |
+
+The scan applies to `allowRead` directories on both Linux (bwrap binds) and macOS (Seatbelt rules). Discovered targets are exposed read-only.
+
+As a safeguard, the scan never auto-exposes credential-bearing locations: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.password-store`, `~/.config/gcloud`, and `.env` files. This built-in list is not configurable, but both directions are under your control through existing options:
+
+- To expose one of these paths anyway, add it to `allowRead` explicitly. Explicit grants bypass the scan safeguard.
+- To keep additional paths out of the sandbox, add them to `denyRead`. Deny rules are applied after all allow rules, so they also override anything the scan exposes.
+
+```json
+{
+  "filesystem": {
+    "allowRead": ["~/.claude"],
+    "symlinkScan": "deep"
+  }
+}
+```
 
 ## Command Configuration
 

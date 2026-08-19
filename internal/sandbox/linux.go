@@ -803,12 +803,98 @@ func getMandatoryDenyPaths(cwd string) []string {
 	return paths
 }
 
+// bindWithDirsArgs returns bwrap args that bind path at itself, creating
+// intermediary --dir entries so the mount point exists under the tmpfs root.
+func bindWithDirsArgs(path string, write bool) []string {
+	dirTarget := path
+	if !isDirectory(path) {
+		dirTarget = filepath.Dir(path)
+	}
+	var args []string
+	for _, dir := range intermediaryDirs("/", dirTarget) {
+		if !isSystemMountPoint(dir) {
+			args = append(args, "--dir", dir)
+		}
+	}
+	flag := "--ro-bind"
+	if write {
+		flag = "--bind"
+	}
+	return append(args, flag, path, path)
+}
+
+// symlinkBindArgs returns bwrap args that expose symlink p inside the
+// sandbox: the link itself is recreated with --symlink and its resolved
+// target is bound at the target's real path, so access through the link path
+// and through realpath() both work. When the link lives under cwd it is
+// already visible through the cwd bind, so only the target is bound (bwrap
+// before 0.6 errors on --symlink over an existing destination). boundTargets
+// (optional) deduplicates target binds across calls. Returns nil when p is
+// not a resolvable symlink.
+func symlinkBindArgs(p, cwd string, write, debug bool, boundTargets map[string]bool) []string {
+	entry, ok := resolveSymlinkEntry(p)
+	if !ok {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Skipping unresolvable symlink: %s\n", p)
+		}
+		return nil
+	}
+	var args []string
+	if cwd == "" || !strings.HasPrefix(p, cwd+string(filepath.Separator)) {
+		for _, dir := range intermediaryDirs("/", filepath.Dir(p)) {
+			if !isSystemMountPoint(dir) {
+				args = append(args, "--dir", dir)
+			}
+		}
+		args = append(args, "--symlink", entry.LinkDest, p)
+	}
+	if boundTargets == nil || !boundTargets[entry.Target] {
+		if boundTargets != nil {
+			boundTargets[entry.Target] = true
+		}
+		args = append(args, bindWithDirsArgs(entry.Target, write)...)
+	}
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall:linux] Recreated symlink %s -> %s\n", p, entry.Target)
+	}
+	return args
+}
+
+// escapingSymlinkBindArgs scans an allowed directory for symlinks whose
+// targets lie outside it (per filesystem.symlinkScan) and binds those targets
+// read-only so the links resolve inside the sandbox.
+func escapingSymlinkBindArgs(dir, mode string, debug bool, boundTargets map[string]bool) []string {
+	if mode == config.SymlinkScanOff {
+		return nil
+	}
+	var args []string
+	for _, entry := range scanEscapingSymlinks(dir, mode == config.SymlinkScanDeep, debug) {
+		if boundTargets[entry.Target] || !fileExists(entry.Target) {
+			continue
+		}
+		boundTargets[entry.Target] = true
+		args = append(args, bindWithDirsArgs(entry.Target, false)...)
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall:linux] Binding symlink target %s (link %s in allowed dir %s)\n", entry.Target, entry.Link, dir)
+		}
+	}
+	return args
+}
+
 // buildDenyByDefaultMounts builds bwrap arguments for deny-by-default filesystem isolation.
 // Starts with --tmpfs / (empty root), then selectively mounts system paths read-only,
 // CWD read-write, and user tooling paths read-only. Sensitive files within CWD are masked.
 func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBridge, rewrittenEnvFiles map[string]string, debug bool) []string {
 	var args []string
 	home, _ := os.UserHomeDir()
+
+	symlinkScan := config.SymlinkScanShallow
+	if cfg != nil {
+		symlinkScan = cfg.Filesystem.SymlinkScanMode()
+	}
+	// Paths bound at their own location so far (binds and symlink targets),
+	// shared across the loops below to avoid duplicate mounts.
+	boundPaths := make(map[string]bool)
 
 	// Start with empty root
 	args = append(args, "--tmpfs", "/")
@@ -889,7 +975,13 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 			if !strings.HasPrefix(p, home) {
 				continue // Only user tooling paths need intermediary dirs
 			}
-			if !fileExists(p) || !canMountOver(p) {
+			if !fileExists(p) {
+				continue
+			}
+			if isSymlink(p) {
+				// Symlinked tooling path (e.g. dotfiles-managed ~/.config):
+				// recreate the link and bind its target.
+				args = append(args, symlinkBindArgs(p, cwd, false, debug, boundPaths)...)
 				continue
 			}
 			// Create intermediary dirs between root and this path
@@ -900,6 +992,7 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 				}
 			}
 			args = append(args, "--ro-bind", p, p)
+			boundPaths[p] = true
 		}
 
 		// Shell config files in home (read-only, literal files)
@@ -907,66 +1000,95 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 		homeIntermedaryAdded := boundDirs[home]
 		for _, f := range shellConfigs {
 			p := filepath.Join(home, f)
-			if fileExists(p) && canMountOver(p) {
-				if !homeIntermedaryAdded {
-					for _, dir := range intermediaryDirs("/", home) {
-						if !boundDirs[dir] && !isSystemMountPoint(dir) {
-							boundDirs[dir] = true
-							args = append(args, "--dir", dir)
-						}
-					}
-					homeIntermedaryAdded = true
-				}
-				args = append(args, "--ro-bind", p, p)
+			if !fileExists(p) {
+				continue
 			}
+			if isSymlink(p) {
+				args = append(args, symlinkBindArgs(p, cwd, false, debug, boundPaths)...)
+				continue
+			}
+			if !homeIntermedaryAdded {
+				for _, dir := range intermediaryDirs("/", home) {
+					if !boundDirs[dir] && !isSystemMountPoint(dir) {
+						boundDirs[dir] = true
+						args = append(args, "--dir", dir)
+					}
+				}
+				homeIntermedaryAdded = true
+			}
+			args = append(args, "--ro-bind", p, p)
+			boundPaths[p] = true
 		}
 
 		// Home tool caches (read-only, for package managers/configs)
 		homeCaches := []string{".cache", ".npm", ".cargo", ".rustup", ".local", ".config"}
 		for _, d := range homeCaches {
 			p := filepath.Join(home, d)
-			if fileExists(p) && canMountOver(p) {
-				if !homeIntermedaryAdded {
-					for _, dir := range intermediaryDirs("/", home) {
-						if !boundDirs[dir] && !isSystemMountPoint(dir) {
-							boundDirs[dir] = true
-							args = append(args, "--dir", dir)
-						}
-					}
-					homeIntermedaryAdded = true
-				}
-				args = append(args, "--ro-bind", p, p)
+			if !fileExists(p) {
+				continue
 			}
+			if isSymlink(p) {
+				args = append(args, symlinkBindArgs(p, cwd, false, debug, boundPaths)...)
+				continue
+			}
+			if !homeIntermedaryAdded {
+				for _, dir := range intermediaryDirs("/", home) {
+					if !boundDirs[dir] && !isSystemMountPoint(dir) {
+						boundDirs[dir] = true
+						args = append(args, "--dir", dir)
+					}
+				}
+				homeIntermedaryAdded = true
+			}
+			args = append(args, "--ro-bind", p, p)
+			boundPaths[p] = true
 		}
 	}
 
 	// User-specified allowRead paths (read-only)
 	if cfg != nil && cfg.Filesystem.AllowRead != nil {
-		boundPaths := make(map[string]bool)
-
 		expandedPaths := ExpandGlobPatterns(cfg.Filesystem.AllowRead)
 		for _, p := range expandedPaths {
-			if fileExists(p) && canMountOver(p) &&
-				!strings.HasPrefix(p, "/dev/") && !strings.HasPrefix(p, "/proc/") && !boundPaths[p] {
-				boundPaths[p] = true
-				// Create intermediary dirs if needed.
-				// For files, only create dirs up to the parent to avoid
-				// creating a directory at the file's path.
-				dirTarget := p
-				if !isDirectory(p) {
-					dirTarget = filepath.Dir(p)
+			if !fileExists(p) || strings.HasPrefix(p, "/dev/") || strings.HasPrefix(p, "/proc/") || boundPaths[p] {
+				continue
+			}
+			boundPaths[p] = true
+			if isSymlink(p) {
+				// Glob matches can be symlinks: recreate the link and bind
+				// its target so the link resolves inside the sandbox.
+				args = append(args, symlinkBindArgs(p, cwd, false, debug, boundPaths)...)
+				continue
+			}
+			// Create intermediary dirs if needed.
+			// For files, only create dirs up to the parent to avoid
+			// creating a directory at the file's path.
+			dirTarget := p
+			if !isDirectory(p) {
+				dirTarget = filepath.Dir(p)
+			}
+			for _, dir := range intermediaryDirs("/", dirTarget) {
+				if !isSystemMountPoint(dir) {
+					args = append(args, "--dir", dir)
 				}
-				for _, dir := range intermediaryDirs("/", dirTarget) {
-					if !isSystemMountPoint(dir) {
-						args = append(args, "--dir", dir)
-					}
-				}
-				args = append(args, "--ro-bind", p, p)
+			}
+			args = append(args, "--ro-bind", p, p)
+			if isDirectory(p) {
+				args = append(args, escapingSymlinkBindArgs(p, symlinkScan, debug, boundPaths)...)
 			}
 		}
 		for _, p := range cfg.Filesystem.AllowRead {
 			normalized := NormalizePath(p)
-			if !ContainsGlobChars(normalized) && fileExists(normalized) && canMountOver(normalized) &&
+			if ContainsGlobChars(normalized) {
+				continue
+			}
+			// When the entry itself is a symlink, NormalizePath resolved it
+			// and the loop above bound the target. Recreate the link path
+			// too: programs open the entry's original path.
+			if expanded := ExpandPath(p); expanded != normalized && !boundPaths[expanded] && isSymlink(expanded) {
+				boundPaths[expanded] = true
+				args = append(args, symlinkBindArgs(expanded, cwd, false, debug, boundPaths)...)
+			}
+			if fileExists(normalized) && canMountOver(normalized) &&
 				!strings.HasPrefix(normalized, "/dev/") && !strings.HasPrefix(normalized, "/proc/") && !boundPaths[normalized] {
 				boundPaths[normalized] = true
 				dirTarget := normalized
@@ -979,6 +1101,9 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 					}
 				}
 				args = append(args, "--ro-bind", normalized, normalized)
+				if isDirectory(normalized) {
+					args = append(args, escapingSymlinkBindArgs(normalized, symlinkScan, debug, boundPaths)...)
+				}
 			}
 		}
 	}
@@ -1047,13 +1172,28 @@ func writableBindArgs(cfg *config.Config) []string {
 			normalized := NormalizePath(p)
 			if !ContainsGlobChars(normalized) {
 				writablePaths[normalized] = true
+				// When the entry is a symlink, NormalizePath resolved it.
+				// Track the link path too so it is recreated in the sandbox.
+				if expanded := ExpandPath(p); expanded != normalized && isSymlink(expanded) {
+					writablePaths[expanded] = true
+				}
 			}
 		}
 	}
 
 	var args []string
+	bound := make(map[string]bool)
+	cwd, _ := os.Getwd()
 	for p := range writablePaths {
-		if fileExists(p) {
+		if !fileExists(p) {
+			continue
+		}
+		if isSymlink(p) {
+			args = append(args, symlinkBindArgs(p, cwd, true, false, bound)...)
+			continue
+		}
+		if !bound[p] {
+			bound[p] = true
 			args = append(args, "--bind", p, p)
 		}
 	}
@@ -1243,6 +1383,14 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		if cfg != nil && cfg.Filesystem.DenyRead != nil {
 			expandedDenyRead := ExpandGlobPatterns(cfg.Filesystem.DenyRead)
 			for _, p := range expandedDenyRead {
+				// A glob match can be a symlink (canMountOver rejects those).
+				// Mask the resolved target instead, otherwise the denied
+				// content stays readable through the link.
+				if isSymlink(p) {
+					if resolved, err := filepath.EvalSymlinks(p); err == nil {
+						p = resolved
+					}
+				}
 				if canMountOver(p) {
 					if isDirectory(p) {
 						bwrapArgs = append(bwrapArgs, "--tmpfs", p)

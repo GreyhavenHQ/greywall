@@ -70,6 +70,13 @@ type NetworkConfig struct {
 	Rules               []NetworkRule `json:"rules,omitempty"`              // Network rules sent to greyproxy per session
 }
 
+// Symlink scan modes for FilesystemConfig.SymlinkScan.
+const (
+	SymlinkScanShallow = "shallow" // scan only direct entries of allowed directories (default)
+	SymlinkScanDeep    = "deep"    // recursively walk allowed directories (capped)
+	SymlinkScanOff     = "off"     // no scanning inside allowed directories
+)
+
 // FilesystemConfig defines filesystem restrictions.
 type FilesystemConfig struct {
 	DefaultDenyRead *bool    `json:"defaultDenyRead,omitempty"` // If nil or true, deny reads by default except system paths, CWD, and AllowRead
@@ -78,12 +85,21 @@ type FilesystemConfig struct {
 	AllowWrite      []string `json:"allowWrite"`
 	DenyWrite       []string `json:"denyWrite"`
 	AllowGitConfig  bool     `json:"allowGitConfig,omitempty"`
+	SymlinkScan     string   `json:"symlinkScan,omitempty"` // "shallow" (default), "deep", or "off": scan allowed dirs for symlinks pointing outside them
 }
 
 // IsDefaultDenyRead returns whether deny-by-default read mode is enabled.
 // Defaults to true when not explicitly set (nil).
 func (f *FilesystemConfig) IsDefaultDenyRead() bool {
 	return f.DefaultDenyRead == nil || *f.DefaultDenyRead
+}
+
+// SymlinkScanMode returns the symlink scan mode, defaulting to shallow.
+func (f *FilesystemConfig) SymlinkScanMode() string {
+	if f.SymlinkScan == "" {
+		return SymlinkScanShallow
+	}
+	return f.SymlinkScan
 }
 
 // CommandConfig defines command restrictions.
@@ -261,6 +277,12 @@ func (c *Config) Validate() error {
 	}
 	if slices.Contains(c.Filesystem.DenyWrite, "") {
 		return errors.New("filesystem.denyWrite contains empty path")
+	}
+	switch c.Filesystem.SymlinkScan {
+	case "", SymlinkScanShallow, SymlinkScanDeep, SymlinkScanOff:
+	default:
+		return fmt.Errorf("invalid filesystem.symlinkScan %q: must be %q, %q, or %q",
+			c.Filesystem.SymlinkScan, SymlinkScanShallow, SymlinkScanDeep, SymlinkScanOff)
 	}
 
 	if slices.Contains(c.Command.Deny, "") {

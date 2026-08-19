@@ -28,6 +28,23 @@ var DangerousDirectories = []string{
 	".claude/agents",
 }
 
+// SensitiveUserDirs lists home-relative directories and files that hold
+// credentials. The escaping-symlink scan (filesystem.symlinkScan) never
+// auto-exposes targets under these paths; they require an explicit allowRead
+// grant.
+var SensitiveUserDirs = []string{
+	".ssh",
+	".gnupg",
+	".aws",
+	".azure",
+	".kube",
+	".docker",
+	".netrc",
+	".git-credentials",
+	".password-store",
+	".config/gcloud",
+}
+
 // SensitiveProjectFiles lists files within the project directory that should be
 // denied for both read and write access. These commonly contain secrets.
 var SensitiveProjectFiles = []string{

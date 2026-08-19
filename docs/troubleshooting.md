@@ -106,6 +106,22 @@ Common causes:
 - Localhost outbound blocked (DB/cache on `127.0.0.1`)
 - Writes blocked (you didn't include a directory in `filesystem.allowWrite`)
 
+## Symlinked config files not found inside the sandbox
+
+If a path in `filesystem.allowRead` is a symlink (common with dotfiles managers like stow), greywall recreates the link inside the sandbox and exposes its resolved target, so this works out of the box.
+
+If the symlink sits *inside* an allowed directory and points outside it, greywall must also expose the target. By default it scans only the direct entries of each allowed directory (`"symlinkScan": "shallow"`). For symlinks in nested subdirectories, set `"symlinkScan": "deep"` in the `filesystem` section, or add the symlink target to `allowRead` directly:
+
+```json
+{
+  "filesystem": {
+    "allowRead": ["~/.claude", "~/dotfiles/claude"]
+  }
+}
+```
+
+Targets under credential-bearing locations (`~/.ssh`, `~/.aws`, `.env` files, and similar) are never exposed by the scan; they always need an explicit `allowRead` entry. Run with `-d` to see which symlinks and targets were detected. See [Configuration](./configuration#symlinks-in-allowed-paths).
+
 ## Node.js HTTP(S) and proxy env vars
 
 Node's built-in `http`/`https` modules ignore `HTTP_PROXY`/`HTTPS_PROXY`. With greywall's default TUN-based transparent proxying, this is not an issue — all traffic is routed through the proxy regardless of whether the application respects proxy environment variables.

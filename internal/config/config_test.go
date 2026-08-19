@@ -748,3 +748,18 @@ func TestValidateProxyURL(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateSymlinkScan(t *testing.T) {
+	for _, mode := range []string{"", SymlinkScanShallow, SymlinkScanDeep, SymlinkScanOff} {
+		cfg := Default()
+		cfg.Filesystem.SymlinkScan = mode
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("symlinkScan %q must be valid: %v", mode, err)
+		}
+	}
+	cfg := Default()
+	cfg.Filesystem.SymlinkScan = "recursive"
+	if err := cfg.Validate(); err == nil {
+		t.Error("symlinkScan \"recursive\" must be rejected")
+	}
+}

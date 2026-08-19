@@ -35,11 +35,6 @@ func (l *LandlockRuleset) Apply() error { return nil }
 // Close is a no-op on non-Linux platforms.
 func (l *LandlockRuleset) Close() error { return nil }
 
-// ExpandGlobPatterns returns the input on non-Linux platforms.
-func ExpandGlobPatterns(patterns []string) []string {
-	return patterns
-}
-
 // GenerateLandlockSetupScript returns empty on non-Linux platforms.
 func GenerateLandlockSetupScript(allowWrite, denyWrite, denyRead []string, debug bool) string {
 	return ""

@@ -18,25 +18,33 @@ func RemoveTrailingGlobSuffix(pattern string) string {
 	return strings.TrimSuffix(pattern, "/**")
 }
 
-// NormalizePath normalizes a path for sandbox configuration.
-// Handles tilde expansion and relative paths.
-func NormalizePath(pathPattern string) string {
+// ExpandPath expands ~ and relative paths to an absolute path without
+// resolving symlinks. Use NormalizePath when symlink resolution is wanted.
+func ExpandPath(pathPattern string) string {
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 
-	normalized := pathPattern
+	expanded := pathPattern
 
 	// Expand ~ and relative paths
 	switch {
 	case pathPattern == "~":
-		normalized = home
+		expanded = home
 	case strings.HasPrefix(pathPattern, "~/"):
-		normalized = filepath.Join(home, pathPattern[2:])
+		expanded = filepath.Join(home, pathPattern[2:])
 	case strings.HasPrefix(pathPattern, "./"), strings.HasPrefix(pathPattern, "../"):
-		normalized, _ = filepath.Abs(filepath.Join(cwd, pathPattern))
+		expanded, _ = filepath.Abs(filepath.Join(cwd, pathPattern))
 	case !filepath.IsAbs(pathPattern) && !ContainsGlobChars(pathPattern):
-		normalized, _ = filepath.Abs(filepath.Join(cwd, pathPattern))
+		expanded, _ = filepath.Abs(filepath.Join(cwd, pathPattern))
 	}
+
+	return expanded
+}
+
+// NormalizePath normalizes a path for sandbox configuration.
+// Handles tilde expansion, relative paths, and symlink resolution.
+func NormalizePath(pathPattern string) string {
+	normalized := ExpandPath(pathPattern)
 
 	// For non-glob patterns, try to resolve symlinks
 	if !ContainsGlobChars(normalized) {
