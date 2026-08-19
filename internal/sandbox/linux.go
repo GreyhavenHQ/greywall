@@ -902,21 +902,35 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 			args = append(args, "--ro-bind", p, p)
 		}
 
-		// Shell config files in home (read-only, literal files)
+		// Shell config files in home (read-only)
+		// These may be symlinks (e.g., GNU Stow managed dotfiles), so resolve
+		// them and bind the real file at the symlink location.
 		shellConfigs := []string{".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile", ".zshenv", ".inputrc"}
 		homeIntermedaryAdded := boundDirs[home]
 		for _, f := range shellConfigs {
 			p := filepath.Join(home, f)
-			if fileExists(p) && canMountOver(p) {
-				if !homeIntermedaryAdded {
-					for _, dir := range intermediaryDirs("/", home) {
-						if !boundDirs[dir] && !isSystemMountPoint(dir) {
-							boundDirs[dir] = true
-							args = append(args, "--dir", dir)
-						}
+			if !fileExists(p) {
+				continue
+			}
+			if !homeIntermedaryAdded {
+				for _, dir := range intermediaryDirs("/", home) {
+					if !boundDirs[dir] && !isSystemMountPoint(dir) {
+						boundDirs[dir] = true
+						args = append(args, "--dir", dir)
 					}
-					homeIntermedaryAdded = true
 				}
+				homeIntermedaryAdded = true
+			}
+			if isSymlink(p) {
+				// Resolve the symlink and bind the real file at the symlink path.
+				// This avoids bwrap following the symlink to a potentially
+				// unreachable target (e.g., ~/dotfiles/.zshrc via GNU Stow).
+				resolved, err := filepath.EvalSymlinks(p)
+				if err != nil || !fileExists(resolved) {
+					continue
+				}
+				args = append(args, "--ro-bind", resolved, p)
+			} else {
 				args = append(args, "--ro-bind", p, p)
 			}
 		}
@@ -925,60 +939,70 @@ func buildDenyByDefaultMounts(cfg *config.Config, cwd string, dbusBridge *DbusBr
 		homeCaches := []string{".cache", ".npm", ".cargo", ".rustup", ".local", ".config"}
 		for _, d := range homeCaches {
 			p := filepath.Join(home, d)
-			if fileExists(p) && canMountOver(p) {
-				if !homeIntermedaryAdded {
-					for _, dir := range intermediaryDirs("/", home) {
-						if !boundDirs[dir] && !isSystemMountPoint(dir) {
-							boundDirs[dir] = true
-							args = append(args, "--dir", dir)
-						}
+			if !fileExists(p) {
+				continue
+			}
+			if !homeIntermedaryAdded {
+				for _, dir := range intermediaryDirs("/", home) {
+					if !boundDirs[dir] && !isSystemMountPoint(dir) {
+						boundDirs[dir] = true
+						args = append(args, "--dir", dir)
 					}
-					homeIntermedaryAdded = true
 				}
+				homeIntermedaryAdded = true
+			}
+			if isSymlink(p) {
+				resolved, err := filepath.EvalSymlinks(p)
+				if err != nil || !fileExists(resolved) {
+					continue
+				}
+				args = append(args, "--ro-bind", resolved, p)
+			} else {
 				args = append(args, "--ro-bind", p, p)
 			}
 		}
 	}
 
 	// User-specified allowRead paths (read-only)
+	// Symlinks are resolved and the real file is bound at the symlink path,
+	// so bwrap doesn't follow the symlink to a potentially unreachable target.
 	if cfg != nil && cfg.Filesystem.AllowRead != nil {
 		boundPaths := make(map[string]bool)
 
+		bindReadPath := func(p string) {
+			if !fileExists(p) || strings.HasPrefix(p, "/dev/") || strings.HasPrefix(p, "/proc/") || boundPaths[p] {
+				return
+			}
+			// Resolve symlinks: bind the real file/dir at the symlink location
+			source := p
+			if isSymlink(p) {
+				resolved, err := filepath.EvalSymlinks(p)
+				if err != nil || !fileExists(resolved) {
+					return
+				}
+				source = resolved
+			}
+			boundPaths[p] = true
+			dirTarget := p
+			if !isDirectory(source) {
+				dirTarget = filepath.Dir(p)
+			}
+			for _, dir := range intermediaryDirs("/", dirTarget) {
+				if !isSystemMountPoint(dir) {
+					args = append(args, "--dir", dir)
+				}
+			}
+			args = append(args, "--ro-bind", source, p)
+		}
+
 		expandedPaths := ExpandGlobPatterns(cfg.Filesystem.AllowRead)
 		for _, p := range expandedPaths {
-			if fileExists(p) && canMountOver(p) &&
-				!strings.HasPrefix(p, "/dev/") && !strings.HasPrefix(p, "/proc/") && !boundPaths[p] {
-				boundPaths[p] = true
-				// Create intermediary dirs if needed.
-				// For files, only create dirs up to the parent to avoid
-				// creating a directory at the file's path.
-				dirTarget := p
-				if !isDirectory(p) {
-					dirTarget = filepath.Dir(p)
-				}
-				for _, dir := range intermediaryDirs("/", dirTarget) {
-					if !isSystemMountPoint(dir) {
-						args = append(args, "--dir", dir)
-					}
-				}
-				args = append(args, "--ro-bind", p, p)
-			}
+			bindReadPath(p)
 		}
 		for _, p := range cfg.Filesystem.AllowRead {
 			normalized := NormalizePath(p)
-			if !ContainsGlobChars(normalized) && fileExists(normalized) && canMountOver(normalized) &&
-				!strings.HasPrefix(normalized, "/dev/") && !strings.HasPrefix(normalized, "/proc/") && !boundPaths[normalized] {
-				boundPaths[normalized] = true
-				dirTarget := normalized
-				if !isDirectory(normalized) {
-					dirTarget = filepath.Dir(normalized)
-				}
-				for _, dir := range intermediaryDirs("/", dirTarget) {
-					if !isSystemMountPoint(dir) {
-						args = append(args, "--dir", dir)
-					}
-				}
-				args = append(args, "--ro-bind", normalized, normalized)
+			if !ContainsGlobChars(normalized) {
+				bindReadPath(normalized)
 			}
 		}
 	}
