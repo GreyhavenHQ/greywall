@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -546,5 +547,65 @@ func TestExpandMacOSTmpPaths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestMacOS_WrapCommandAllowsUnixSocketInSessionTmpDir verifies that the
+// per-session TMPDIR passed into WrapCommandMacOS is granted a network-bind
+// allowance for local Unix-domain sockets, not just filesystem read/write.
+//
+// This covers the go-plugin RPC handshake used by every Terraform provider
+// (and by Packer/Vault/Nomad plugins): the plugin subprocess binds an
+// AF_UNIX socket under os.TempDir() to talk to its parent process. Before
+// this fix, that directory was writable but bind() on it still returned
+// EPERM, because filesystem allow-write and Seatbelt's network-bind check
+// are enforced independently and only the former was extended to cover the
+// session tmp dir.
+func TestMacOS_WrapCommandAllowsUnixSocketInSessionTmpDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// WrapCommandMacOS resolves paths through NormalizePath, which follows
+	// symlinks (relevant on macOS where /tmp -> /private/tmp); resolve the
+	// same way here so the expected literal matches what lands in the
+	// generated profile.
+	resolved, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		resolved = tmpDir
+	}
+
+	cfg := &config.Config{}
+	profile, err := WrapCommandMacOS(cfg, "echo test", nil, nil, tmpDir, false)
+	if err != nil {
+		t.Fatalf("WrapCommandMacOS returned error: %v", err)
+	}
+
+	want := fmt.Sprintf("(allow network* (subpath %q))", resolved)
+	if !strings.Contains(profile, want) {
+		t.Errorf("expected per-session TMPDIR to be allowed for unix-domain socket bind\nwant substring: %s\nprofile:\n%s", want, profile)
+	}
+}
+
+// TestMacOS_WrapCommandPreservesConfiguredUnixSockets verifies the fix is
+// additive: user-configured network.allowUnixSockets entries still show up
+// in the profile alongside the per-session tmp dir, and an empty tmpDir
+// (e.g. learning mode, where TMPDIR is not overridden) doesn't add a bogus
+// empty-path rule.
+func TestMacOS_WrapCommandPreservesConfiguredUnixSockets(t *testing.T) {
+	configuredSocket := "/home/user/.momentum/wrapper.sock"
+
+	cfg := &config.Config{}
+	cfg.Network.AllowUnixSockets = []string{configuredSocket}
+
+	profile, err := WrapCommandMacOS(cfg, "echo test", nil, nil, "", false)
+	if err != nil {
+		t.Fatalf("WrapCommandMacOS returned error: %v", err)
+	}
+
+	want := fmt.Sprintf("(allow network* (subpath %q))", configuredSocket)
+	if !strings.Contains(profile, want) {
+		t.Errorf("expected configured unix socket path to be preserved\nwant substring: %s\nprofile:\n%s", want, profile)
+	}
+	if strings.Contains(profile, `(allow network* (subpath ""))`) {
+		t.Errorf("empty tmpDir must not produce an empty-path network-bind rule\nprofile:\n%s", profile)
 	}
 }

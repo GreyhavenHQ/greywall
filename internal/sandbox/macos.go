@@ -752,6 +752,21 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, re
 	// If no proxy: block all outbound. If proxy: allow outbound only to proxy.
 	needsNetworkRestriction := true
 
+	// Unix-domain sockets: user-configured entries plus the per-session
+	// TMPDIR. Go's hashicorp/go-plugin (used by every Terraform provider,
+	// and by Packer/Vault/Nomad plugins) binds its RPC socket under
+	// os.TempDir() by default, which resolves to this per-session tmpDir
+	// once TMPDIR is overridden above. That directory is already trusted
+	// for arbitrary file writes (see allowPaths above); without also
+	// allowing it here, network-bind on the socket file fails with EPERM
+	// even though the sandboxed process could write the same bytes to a
+	// regular file at that path. This keeps the trust boundary consistent
+	// with the filesystem grant rather than widening it.
+	allowUnixSockets := append([]string{}, cfg.Network.AllowUnixSockets...)
+	if tmpDir != "" {
+		allowUnixSockets = append(allowUnixSockets, tmpDir)
+	}
+
 	params := MacOSSandboxParams{
 		Command:                 command,
 		NeedsNetworkRestriction: needsNetworkRestriction,
@@ -762,7 +777,7 @@ func WrapCommandMacOS(cfg *config.Config, command string, exposedPorts []int, re
 		HTTPProxyPort:           httpProxyPort,
 		DnsProxyHost:            dnsProxyHost,
 		DnsProxyPort:            dnsProxyPort,
-		AllowUnixSockets:        cfg.Network.AllowUnixSockets,
+		AllowUnixSockets:        allowUnixSockets,
 		AllowAllUnixSockets:     cfg.Network.AllowAllUnixSockets,
 		AllowLocalBinding:       allowLocalBinding,
 		AllowLocalOutbound:      allowLocalOutbound,
