@@ -159,6 +159,10 @@ func NewProxyBridge(proxyURL string, debug bool) (*ProxyBridge, error) {
 // proxy. Inside the sandbox it backs HTTP_PROXY/HTTPS_PROXY, which many
 // clients (wget, pip, Python requests without PySocks) cannot use with a
 // SOCKS URL.
+//
+// Limitation: an https:// proxy is reached as https://127.0.0.1:<port> inside
+// the sandbox, so clients verify its TLS certificate against 127.0.0.1 and
+// fail unless the certificate covers that address.
 func NewHTTPProxyBridge(httpProxyURL string, debug bool) (*ProxyBridge, error) {
 	u, err := url.Parse(httpProxyURL)
 	if err != nil {
@@ -217,15 +221,17 @@ func startProxyBridge(u *url.URL, kind string, debug bool) (*ProxyBridge, error)
 		return nil, fmt.Errorf("failed to start proxy bridge: %w", err)
 	}
 
-	// Wait for socket to be created, up to 5 seconds
-	for range 50 {
+	// Wait for socket to be created, up to 5 seconds. socat is usually ready
+	// within a few milliseconds, so poll finely: every bridge adds this wait
+	// to sandbox startup.
+	for range 500 {
 		if fileExists(socketPath) {
 			if debug {
 				fmt.Fprintf(os.Stderr, "[greywall:linux] Proxy bridge ready (%s)\n", socketPath)
 			}
 			return bridge, nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	bridge.Cleanup()
