@@ -18,13 +18,15 @@ import (
 	"github.com/GreyhavenHQ/greywall/internal/config"
 )
 
-// ProxyBridge bridges sandbox to an external SOCKS5 proxy via Unix socket.
+// ProxyBridge bridges sandbox to an external proxy (SOCKS5 or HTTP CONNECT)
+// via Unix socket.
 type ProxyBridge struct {
 	SocketPath string // Unix socket path
-	ProxyHost  string // Parsed from ProxyURL
-	ProxyPort  string // Parsed from ProxyURL
-	ProxyUser  string // Username from ProxyURL (if any)
-	ProxyPass  string // Password from ProxyURL (if any)
+	Scheme     string // Proxy URL scheme (socks5, socks5h, http, https)
+	ProxyHost  string // Parsed from the proxy URL
+	ProxyPort  string // Parsed from the proxy URL
+	ProxyUser  string // Username from the proxy URL (if any)
+	ProxyPass  string // Password from the proxy URL (if any)
 	HasAuth    bool   // Whether credentials were provided
 	process    *exec.Cmd
 	debug      bool
@@ -138,18 +140,44 @@ type LinuxSandboxOptions struct {
 	// can produce audio output. Disabled by default because these sockets also
 	// allow microphone capture and (via PipeWire) camera/screen access.
 	AllowAudio bool
+	// HTTPProxyBridge, when set, backs HTTP_PROXY/HTTPS_PROXY with an HTTP
+	// CONNECT proxy. ALL_PROXY always uses the SOCKS5 proxy bridge.
+	HTTPProxyBridge *ProxyBridge
 }
 
 // NewProxyBridge creates a Unix socket bridge to an external SOCKS5 proxy.
 // The bridge uses socat to forward from a Unix socket to the external proxy's TCP address.
 func NewProxyBridge(proxyURL string, debug bool) (*ProxyBridge, error) {
-	if _, err := exec.LookPath("socat"); err != nil {
-		return nil, fmt.Errorf("socat is required on Linux but not found: %w", err)
-	}
-
 	u, err := parseProxyURL(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid proxy URL: %w", err)
+	}
+	return startProxyBridge(u, "proxy", debug)
+}
+
+// NewHTTPProxyBridge creates a Unix socket bridge to an external HTTP CONNECT
+// proxy. Inside the sandbox it backs HTTP_PROXY/HTTPS_PROXY, which many
+// clients (wget, pip, Python requests without PySocks) cannot use with a
+// SOCKS URL.
+func NewHTTPProxyBridge(httpProxyURL string, debug bool) (*ProxyBridge, error) {
+	u, err := url.Parse(httpProxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid HTTP proxy URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("HTTP proxy URL must use http:// or https:// scheme, got %s", u.Scheme)
+	}
+	if u.Hostname() == "" || u.Port() == "" {
+		return nil, fmt.Errorf("HTTP proxy URL must include hostname and port")
+	}
+	return startProxyBridge(u, "httpproxy", debug)
+}
+
+// startProxyBridge starts socat forwarding a new Unix socket to the proxy's
+// TCP address. The forward is protocol-agnostic; kind only names the socket.
+func startProxyBridge(u *url.URL, kind string, debug bool) (*ProxyBridge, error) {
+	if _, err := exec.LookPath("socat"); err != nil {
+		return nil, fmt.Errorf("socat is required on Linux but not found: %w", err)
 	}
 
 	id := make([]byte, 8)
@@ -159,10 +187,11 @@ func NewProxyBridge(proxyURL string, debug bool) (*ProxyBridge, error) {
 	socketID := hex.EncodeToString(id)
 
 	tmpDir := os.TempDir()
-	socketPath := filepath.Join(tmpDir, fmt.Sprintf("greywall-proxy-%s.sock", socketID))
+	socketPath := filepath.Join(tmpDir, fmt.Sprintf("greywall-%s-%s.sock", kind, socketID))
 
 	bridge := &ProxyBridge{
 		SocketPath: socketPath,
+		Scheme:     u.Scheme,
 		ProxyHost:  u.Hostname(),
 		ProxyPort:  u.Port(),
 		debug:      debug,
@@ -175,7 +204,7 @@ func NewProxyBridge(proxyURL string, debug bool) (*ProxyBridge, error) {
 		bridge.ProxyPass, _ = u.User.Password()
 	}
 
-	// Start bridge: Unix socket -> external SOCKS5 proxy TCP
+	// Start bridge: Unix socket -> external proxy TCP
 	socatArgs := []string{
 		fmt.Sprintf("UNIX-LISTEN:%s,fork,reuseaddr", socketPath),
 		fmt.Sprintf("TCP:%s:%s", bridge.ProxyHost, bridge.ProxyPort),
@@ -1086,11 +1115,61 @@ func WrapCommandLinux(cfg *config.Config, command string, proxyBridge *ProxyBrid
 	})
 }
 
-// WrapCommandLinuxWithOptions wraps a command with configurable sandbox options.
-// detectFeatures is a seam for tests; production always uses the cached
-// detection. Tests replace it to exercise environments that cannot be
-// reproduced on the host running them, such as a missing network namespace.
-var detectFeatures = DetectLinuxFeatures
+// Loopback ports inside the sandbox where the socat bridges listen.
+const (
+	sandboxSocksProxyPort = 18321
+	sandboxHTTPProxyPort  = 18322
+)
+
+// sandboxProxyEnv returns the proxy environment variables exported inside the
+// sandbox, pointing at the in-sandbox ends of the bridges.
+//
+// ALL_PROXY uses SOCKS5. HTTP_PROXY/HTTPS_PROXY use the HTTP CONNECT bridge
+// when there is one, because many clients that read them cannot speak SOCKS
+// (wget: "Unsupported scheme"; pip and Python requests without PySocks:
+// "Missing dependencies for SOCKS support") and fail instead of falling back.
+// Without an HTTP bridge they are left unset when TUN carries such clients,
+// and set to SOCKS otherwise as the only route out.
+//
+// Each URL carries the bridge credentials: greyproxy derives the client
+// identity, and so the session's rules, from the proxy username.
+func sandboxProxyEnv(socksBridge, httpBridge *ProxyBridge, transparent bool) [][2]string {
+	socksURL := bridgeProxyURL("socks5h", socksBridge, sandboxSocksProxyPort)
+	env := [][2]string{
+		{"ALL_PROXY", socksURL},
+		{"all_proxy", socksURL},
+	}
+
+	httpURL := ""
+	switch {
+	case httpBridge != nil:
+		httpURL = bridgeProxyURL(httpBridge.Scheme, httpBridge, sandboxHTTPProxyPort)
+	case !transparent:
+		httpURL = socksURL
+	}
+	if httpURL != "" {
+		env = append(env,
+			[2]string{"HTTP_PROXY", httpURL},
+			[2]string{"HTTPS_PROXY", httpURL},
+			[2]string{"http_proxy", httpURL},
+			[2]string{"https_proxy", httpURL},
+		)
+	}
+
+	return append(env,
+		[2]string{"NO_PROXY", "localhost,127.0.0.1"},
+		[2]string{"no_proxy", "localhost,127.0.0.1"},
+	)
+}
+
+// bridgeProxyURL builds the in-sandbox URL of a bridge, keeping its credentials.
+func bridgeProxyURL(scheme string, bridge *ProxyBridge, port int) string {
+	u := url.URL{Scheme: scheme, Host: fmt.Sprintf("127.0.0.1:%d", port)}
+	if bridge.HasAuth {
+		u.User = url.UserPassword(bridge.ProxyUser, bridge.ProxyPass)
+	}
+	return u.String()
+}
 
 // networkEnforcementError reports that the sandbox has no way to contain
 // network access.
@@ -1115,6 +1194,7 @@ func networkEnforcementError(features *LinuxFeatures, watch bool) error {
 		ErrNetworkNotIsolated)
 }
 
+// WrapCommandLinuxWithOptions wraps a command with configurable sandbox options.
 func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge *ProxyBridge, dnsBridge *DnsBridge, reverseBridge *ReverseBridge, forwardBridge *ForwardBridge, dbusBridge *DbusBridge, tun2socksPath string, opts LinuxSandboxOptions) (string, error) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		return "", fmt.Errorf("bubblewrap (bwrap) is required on Linux but not found: %w", err)
@@ -1361,6 +1441,12 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 			bwrapArgs,
 			"--bind", proxyBridge.SocketPath, proxyBridge.SocketPath,
 		)
+		if opts.HTTPProxyBridge != nil {
+			bwrapArgs = append(
+				bwrapArgs,
+				"--bind", opts.HTTPProxyBridge.SocketPath, opts.HTTPProxyBridge.SocketPath,
+			)
+		}
 
 		// Bind-mount the greyproxy CA certificate so Node.js apps can trust it.
 		// Node.js uses its own compiled-in CA bundle and ignores the OS keychain,
@@ -1493,10 +1579,12 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		fmt.Fprintf(&innerScript, "export REQUESTS_CA_BUNDLE=%s\n", ShellQuoteSingle(caCertPath))
 	}
 
+	transparentProxy := proxyBridge != nil && tun2socksPath != "" && features.CanUseTransparentProxy()
+
 	if proxyBridge != nil {
-		// The SOCKS5 bridge and proxy environment variables are the primary
-		// path, not a fallback. A cooperative client speaking socks5h sends the
-		// hostname to the proxy, so policy is applied against the name the
+		// The bridges and proxy environment variables are the primary path,
+		// not a fallback. A cooperative client sends the hostname to the proxy
+		// (socks5h or HTTP CONNECT), so policy is applied against the name the
 		// client actually asked for. TUN, below, can only observe packets and
 		// must infer the destination.
 		fmt.Fprintf(&innerScript, `
@@ -1505,23 +1593,27 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 ip link set lo up 2>/dev/null
 
 # Bridge: local port -> Unix socket -> host -> external SOCKS5 proxy
-PROXY_PORT=18321
+PROXY_PORT=%d
 socat TCP-LISTEN:${PROXY_PORT},fork,reuseaddr,bind=127.0.0.1 UNIX-CONNECT:%s >/dev/null 2>&1 &
 BRIDGE_PID=$!
+`, sandboxSocksProxyPort, proxyBridge.SocketPath)
 
-export ALL_PROXY=socks5h://127.0.0.1:${PROXY_PORT}
-export all_proxy=socks5h://127.0.0.1:${PROXY_PORT}
-export HTTP_PROXY=socks5h://127.0.0.1:${PROXY_PORT}
-export HTTPS_PROXY=socks5h://127.0.0.1:${PROXY_PORT}
-export http_proxy=socks5h://127.0.0.1:${PROXY_PORT}
-export https_proxy=socks5h://127.0.0.1:${PROXY_PORT}
-export NO_PROXY=localhost,127.0.0.1
-export no_proxy=localhost,127.0.0.1
+		if opts.HTTPProxyBridge != nil {
+			fmt.Fprintf(&innerScript, `
+# Bridge: local port -> Unix socket -> host -> external HTTP CONNECT proxy
+socat TCP-LISTEN:%d,fork,reuseaddr,bind=127.0.0.1 UNIX-CONNECT:%s >/dev/null 2>&1 &
+HTTP_BRIDGE_PID=$!
+`, sandboxHTTPProxyPort, opts.HTTPProxyBridge.SocketPath)
+		}
 
-`, proxyBridge.SocketPath)
+		innerScript.WriteString("\n")
+		for _, kv := range sandboxProxyEnv(proxyBridge, opts.HTTPProxyBridge, transparentProxy) {
+			fmt.Fprintf(&innerScript, "export %s=%s\n", kv[0], ShellQuoteSingle(kv[1]))
+		}
+		innerScript.WriteString("\n")
 	}
 
-	if proxyBridge != nil && tun2socksPath != "" && features.CanUseTransparentProxy() {
+	if transparentProxy {
 		// Build the tun2socks proxy URL with credentials if available
 		// Many SOCKS5 proxies require the username/password auth flow even
 		// without real credentials (e.g., gost always selects method 0x02).
@@ -1663,10 +1755,15 @@ exit $GREYWALL_STRACE_EXIT
 		} else {
 			featureList = append(featureList, "bwrap(pid,fs)")
 		}
-		if proxyBridge != nil && features.CanUseTransparentProxy() {
+		if proxyBridge != nil {
+			if opts.HTTPProxyBridge != nil {
+				featureList = append(featureList, "proxy(env-vars: socks5+http)")
+			} else {
+				featureList = append(featureList, "proxy(env-vars: socks5)")
+			}
+		}
+		if transparentProxy {
 			featureList = append(featureList, "tun2socks(transparent)")
-		} else if proxyBridge != nil {
-			featureList = append(featureList, "proxy(env-vars)")
 		}
 		if features.HasSeccomp && opts.UseSeccomp && seccompFilterPath != "" {
 			featureList = append(featureList, "seccomp")
@@ -1785,17 +1882,19 @@ func PrintLinuxFeatures() {
 	if features.CanUnshareNet {
 		fmt.Printf("  ✓ Network namespace isolation available\n")
 	} else if features.HasBwrap {
-		fmt.Printf("  ⚠ Network namespace unavailable (containerized environment?)\n")
-		fmt.Printf("    Sandbox will still work but with reduced network isolation.\n")
-		fmt.Printf("    This is common in Docker, GitHub Actions, and other CI systems.\n")
+		fmt.Printf("  ✗ Network namespace unavailable (containerized environment?)\n")
+		fmt.Printf("    greywall refuses to run: network access cannot be contained.\n")
+		fmt.Printf("    Only --watch runs, without network containment.\n")
+		fmt.Printf("    In Docker, add --cap-add=NET_ADMIN to the container.\n")
 	}
 
 	if features.CanUseTransparentProxy() {
 		fmt.Printf("  ✓ Transparent proxy available (tun2socks + TUN device)\n")
+		fmt.Printf("    Catches programs that ignore HTTP_PROXY/HTTPS_PROXY/ALL_PROXY.\n")
 	} else {
 		fmt.Printf("  ○ Transparent proxy not available (needs ip, /dev/net/tun, network namespace, and child CAP_NET_ADMIN)\n")
 		if features.CanUnshareNet {
-			fmt.Printf("    Proxy-aware applications will use HTTP_PROXY/HTTPS_PROXY/ALL_PROXY instead.\n")
+			fmt.Printf("    Only programs that honor HTTP_PROXY/HTTPS_PROXY/ALL_PROXY reach the network.\n")
 		}
 	}
 
