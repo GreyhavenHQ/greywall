@@ -138,18 +138,25 @@ func TestSandboxProxyEnv(t *testing.T) {
 		name        string
 		http        *ProxyBridge
 		transparent bool
-		wantHTTP    string // "" = HTTP(S)_PROXY must be unset
+		wantHTTP    string // "" = no proxy variable may be set
 	}{
 		{name: "http bridge with TUN", http: httpBridge, transparent: true, wantHTTP: httpURL},
 		{name: "http bridge without TUN", http: httpBridge, transparent: false, wantHTTP: httpURL},
-		{name: "no http bridge, TUN carries non-SOCKS clients", transparent: true, wantHTTP: ""},
+		{name: "no http bridge, TUN carries everything", transparent: true, wantHTTP: ""},
 		{name: "no http bridge, no TUN", transparent: false, wantHTTP: socksURL},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			got := sandboxProxyEnv(socks, tc.http, tc.transparent)
+			if tc.wantHTTP == "" {
+				if len(got) != 0 {
+					t.Errorf("expected no proxy variables, got %v", got)
+				}
+				return
+			}
 			env := map[string]string{}
-			for _, kv := range sandboxProxyEnv(socks, tc.http, tc.transparent) {
+			for _, kv := range got {
 				env[kv[0]] = kv[1]
 			}
 			for _, k := range []string{"ALL_PROXY", "all_proxy"} {
@@ -158,15 +165,8 @@ func TestSandboxProxyEnv(t *testing.T) {
 				}
 			}
 			for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
-				got, ok := env[k]
-				if tc.wantHTTP == "" {
-					if ok {
-						t.Errorf("%s = %q, want unset", k, got)
-					}
-					continue
-				}
-				if got != tc.wantHTTP {
-					t.Errorf("%s = %q, want %q", k, got, tc.wantHTTP)
+				if env[k] != tc.wantHTTP {
+					t.Errorf("%s = %q, want %q", k, env[k], tc.wantHTTP)
 				}
 			}
 			if env["NO_PROXY"] != "localhost,127.0.0.1" {

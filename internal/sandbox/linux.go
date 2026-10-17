@@ -1124,37 +1124,39 @@ const (
 // sandboxProxyEnv returns the proxy environment variables exported inside the
 // sandbox, pointing at the in-sandbox ends of the bridges.
 //
-// ALL_PROXY uses SOCKS5. HTTP_PROXY/HTTPS_PROXY use the HTTP CONNECT bridge
-// when there is one, because many clients that read them cannot speak SOCKS
-// (wget: "Unsupported scheme"; pip and Python requests without PySocks:
-// "Missing dependencies for SOCKS support") and fail instead of falling back.
-// Without an HTTP bridge they are left unset when TUN carries such clients,
-// and set to SOCKS otherwise as the only route out.
+// ALL_PROXY uses SOCKS5. HTTP_PROXY/HTTPS_PROXY use the HTTP CONNECT bridge,
+// because many clients that read them cannot speak SOCKS (wget: "Unsupported
+// scheme"; pip and Python requests without PySocks: "Missing dependencies for
+// SOCKS support") and fail instead of falling back to TUN. Python requests
+// also reads ALL_PROXY, so it works only because HTTPS_PROXY takes precedence.
+//
+// Without an HTTP bridge, a SOCKS URL in any of these variables breaks such
+// clients. If TUN is available nothing is set, and TUN carries all traffic.
+// If not, everything is set to SOCKS, as the only route out.
 //
 // Each URL carries the bridge credentials: greyproxy derives the client
 // identity, and so the session's rules, from the proxy username.
 func sandboxProxyEnv(socksBridge, httpBridge *ProxyBridge, transparent bool) [][2]string {
+	if httpBridge == nil && transparent {
+		return nil
+	}
+
 	socksURL := bridgeProxyURL("socks5h", socksBridge, sandboxSocksProxyPort)
 	env := [][2]string{
 		{"ALL_PROXY", socksURL},
 		{"all_proxy", socksURL},
 	}
 
-	httpURL := ""
-	switch {
-	case httpBridge != nil:
+	httpURL := socksURL
+	if httpBridge != nil {
 		httpURL = bridgeProxyURL(httpBridge.Scheme, httpBridge, sandboxHTTPProxyPort)
-	case !transparent:
-		httpURL = socksURL
 	}
-	if httpURL != "" {
-		env = append(env,
-			[2]string{"HTTP_PROXY", httpURL},
-			[2]string{"HTTPS_PROXY", httpURL},
-			[2]string{"http_proxy", httpURL},
-			[2]string{"https_proxy", httpURL},
-		)
-	}
+	env = append(env,
+		[2]string{"HTTP_PROXY", httpURL},
+		[2]string{"HTTPS_PROXY", httpURL},
+		[2]string{"http_proxy", httpURL},
+		[2]string{"https_proxy", httpURL},
+	)
 
 	return append(env,
 		[2]string{"NO_PROXY", "localhost,127.0.0.1"},
@@ -1755,12 +1757,11 @@ exit $GREYWALL_STRACE_EXIT
 		} else {
 			featureList = append(featureList, "bwrap(pid,fs)")
 		}
-		if proxyBridge != nil {
-			if opts.HTTPProxyBridge != nil {
-				featureList = append(featureList, "proxy(env-vars: socks5+http)")
-			} else {
-				featureList = append(featureList, "proxy(env-vars: socks5)")
-			}
+		switch {
+		case proxyBridge != nil && opts.HTTPProxyBridge != nil:
+			featureList = append(featureList, "proxy(env-vars: socks5+http)")
+		case proxyBridge != nil && !transparentProxy:
+			featureList = append(featureList, "proxy(env-vars: socks5)")
 		}
 		if transparentProxy {
 			featureList = append(featureList, "tun2socks(transparent)")
