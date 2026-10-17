@@ -18,7 +18,7 @@ By default, greywall points at [Greyproxy](/greyproxy) at `socks5://localhost:43
 
 How traffic reaches the proxy depends on the platform:
 
-- **Linux**: the sandbox runs in an isolated network namespace (`bubblewrap --unshare-net`) with a TUN device inside. All traffic is captured by `tun2socks` and forwarded to the external proxy over a Unix-socket bridge. This works for any process regardless of whether it honors proxy environment variables. If TUN is unavailable, greywall falls back to setting `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`.
+- **Linux**: the sandbox runs in an isolated network namespace (`bubblewrap --unshare-net`) with a TUN device inside. All traffic is captured by `tun2socks` and forwarded to the external proxy over a Unix-socket bridge. This works for any process regardless of whether it honors proxy environment variables. Greywall also sets `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` so applications that honor them send the hostname to the proxy; if TUN is unavailable, they are the only route out.
 - **macOS**: the Seatbelt profile blocks direct outbound connections and greywall sets `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` to point at the proxy. Applications that honor those variables are routed through it. Applications that ignore them (for example Node.js's built-in `http`/`https`) are blocked by the sandbox rather than silently bypassing the proxy.
 
 Because filtering lives in the proxy, domain allowlists, rule changes, and live approval all happen in the proxy's dashboard or API, not in the greywall config. See [Greyproxy](/greyproxy) for how that side works.

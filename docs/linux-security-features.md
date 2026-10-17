@@ -78,14 +78,18 @@ This provides **defense-in-depth**: both bwrap mounts AND Landlock kernel restri
 
 ### When network namespace is not available (containerized environments)
 
-- **Impact**: `--unshare-net` is skipped; network is not fully isolated
-- **Cause**: Running in Docker, GitHub Actions, or other environments without `CAP_NET_ADMIN`
-- **Fallback**: Proxy-based routing still works; filesystem/PID/seccomp isolation still active
+- **Impact**: greywall refuses to run and exits with code `78`
+- **Cause**: Running in a container without `CAP_NET_ADMIN`, or a restrictive Kubernetes security context
 - **Check**: Run `greywall --linux-features` and look for "Network namespace (--unshare-net): false"
-- **Workaround**: Run with `sudo`, or in Docker use `--cap-add=NET_ADMIN`
+- **Fix**: In Docker use `--cap-add=NET_ADMIN`; in Kubernetes grant `NET_ADMIN` in the pod's security context
 
-> [!NOTE]
-> This is the most common "reduced isolation" scenario. Greywall automatically detects this at startup and adapts. See the troubleshooting guide for more details.
+> [!IMPORTANT]
+> The network namespace is the containment boundary. Proxy environment variables direct cooperative programs to the proxy, but they are advisory — only the namespace stops a program that ignores them. Without it nothing is enforced, so a deny-by-default sandbox must decline rather than present the appearance of containment.
+>
+> `greywatch` is exempt: it is allow-by-default observability, and warns instead.
+
+Exit code `78` is specific to this refusal, so callers can distinguish it from a
+failure of the sandboxed command itself.
 
 ### When bwrap is not available
 

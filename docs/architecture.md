@@ -38,7 +38,7 @@ flowchart LR
     DNSBR -->|Unix socket| DNSPROXY
 ```
 
-If the TUN device is unavailable (for example in a container that does not expose `/dev/net/tun`), greywall falls back to setting `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` inside the namespace. In that mode only applications that honor those variables are routed; the rest are blocked by the namespace isolation rather than silently escaping.
+Greywall also sets `HTTP_PROXY`/`HTTPS_PROXY` (HTTP CONNECT bridge) and `ALL_PROXY` (SOCKS5 bridge) inside the namespace, so applications that honor them send the hostname to the proxy. If the TUN device is unavailable (for example in a container that does not expose `/dev/net/tun`, or under Ubuntu 24.04+ AppArmor), only applications that honor those variables are routed; the rest are blocked by the namespace isolation rather than silently escaping.
 
 ## macOS
 

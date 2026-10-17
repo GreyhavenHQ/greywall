@@ -66,6 +66,7 @@ type LinuxSandboxOptions struct {
 	StraceLogPath     string
 	RewrittenEnvFiles map[string]string
 	AllowAudio        bool
+	HTTPProxyBridge   *ProxyBridge
 }
 
 // NewProxyBridge returns an error on non-Linux platforms.
@@ -73,8 +74,18 @@ func NewProxyBridge(proxyURL string, debug bool) (*ProxyBridge, error) {
 	return nil, fmt.Errorf("proxy bridge not available on this platform")
 }
 
+// NewHTTPProxyBridge returns an error on non-Linux platforms.
+func NewHTTPProxyBridge(httpProxyURL string, debug bool) (*ProxyBridge, error) {
+	return nil, fmt.Errorf("HTTP proxy bridge not available on this platform")
+}
+
 // Cleanup is a no-op on non-Linux platforms.
 func (b *ProxyBridge) Cleanup() {}
+
+// networkEnforcementError is a no-op on non-Linux platforms.
+func networkEnforcementError(features *LinuxFeatures, watch bool) error {
+	return nil
+}
 
 // NewDnsBridge returns an error on non-Linux platforms.
 func NewDnsBridge(dnsAddr string, debug bool) (*DnsBridge, error) {

@@ -10,23 +10,29 @@ import (
 	"github.com/GreyhavenHQ/greywall/internal/platform"
 )
 
+// detectFeatures is a seam for tests; production always uses the cached
+// detection. Tests replace it to exercise environments that cannot be
+// reproduced on the host running them, such as a missing network namespace.
+var detectFeatures = DetectLinuxFeatures
+
 // Manager handles sandbox initialization and command wrapping.
 type Manager struct {
-	config        *config.Config
-	proxyBridge   *ProxyBridge
-	dnsBridge     *DnsBridge
-	reverseBridge *ReverseBridge
-	forwardBridge *ForwardBridge
-	dbusBridge    *DbusBridge
-	tun2socksPath string // path to extracted tun2socks binary on host
-	exposedPorts  []int
-	debug         bool
-	monitor       bool
-	initialized   bool
-	learning      bool   // learning mode: permissive sandbox with strace/eslogger
-	watch         bool   // watch mode: permissive sandbox for pure observability (no strace, no profile gen)
-	straceLogPath string // host-side temp file for strace output (Linux)
-	commandName   string // name of the command being learned
+	config          *config.Config
+	proxyBridge     *ProxyBridge
+	httpProxyBridge *ProxyBridge // HTTP CONNECT bridge backing HTTP(S)_PROXY (Linux)
+	dnsBridge       *DnsBridge
+	reverseBridge   *ReverseBridge
+	forwardBridge   *ForwardBridge
+	dbusBridge      *DbusBridge
+	tun2socksPath   string // path to extracted tun2socks binary on host
+	exposedPorts    []int
+	debug           bool
+	monitor         bool
+	initialized     bool
+	learning        bool   // learning mode: permissive sandbox with strace/eslogger
+	watch           bool   // watch mode: permissive sandbox for pure observability (no strace, no profile gen)
+	straceLogPath   string // host-side temp file for strace output (Linux)
+	commandName     string // name of the command being learned
 	// macOS learning mode fields
 	learningRootPID   int               // root PID of the sandboxed command (for eslogger PID tree tracking)
 	esloggerLogPath   string            // temp file for eslogger output (macOS)
@@ -150,6 +156,13 @@ func (m *Manager) Initialize() error {
 
 	// On Linux, set up proxy bridge and tun2socks if proxy is configured
 	if platform.Detect() == platform.Linux {
+		// Refuse before any bridge, temp file or strace log is created, so a
+		// refused run leaves nothing behind.
+		features := detectFeatures()
+		if err := networkEnforcementError(features, m.watch); err != nil {
+			return err
+		}
+
 		if m.config.Network.ProxyURL != "" {
 			// Extract embedded tun2socks binary
 			tun2socksPath, err := extractTun2Socks()
@@ -169,11 +182,27 @@ func (m *Manager) Initialize() error {
 			}
 			m.proxyBridge = bridge
 
+			// Create HTTP CONNECT bridge for HTTP_PROXY/HTTPS_PROXY
+			if m.config.Network.HTTPProxyURL != "" {
+				httpBridge, err := NewHTTPProxyBridge(m.config.Network.HTTPProxyURL, m.debug)
+				if err != nil {
+					m.proxyBridge.Cleanup()
+					if m.tun2socksPath != "" {
+						_ = os.Remove(m.tun2socksPath)
+					}
+					return fmt.Errorf("failed to initialize HTTP proxy bridge: %w", err)
+				}
+				m.httpProxyBridge = httpBridge
+			}
+
 			// Create DNS bridge if a DNS server is configured
 			if m.config.Network.DnsAddr != "" {
 				dnsBridge, err := NewDnsBridge(m.config.Network.DnsAddr, m.debug)
 				if err != nil {
 					m.proxyBridge.Cleanup()
+					if m.httpProxyBridge != nil {
+						m.httpProxyBridge.Cleanup()
+					}
 					if m.tun2socksPath != "" {
 						_ = os.Remove(m.tun2socksPath)
 					}
@@ -185,12 +214,14 @@ func (m *Manager) Initialize() error {
 
 		// Set up reverse bridge for exposed ports (inbound connections)
 		// Only needed when network namespace is available - otherwise they share the network
-		features := DetectLinuxFeatures()
 		if len(m.exposedPorts) > 0 && features.CanUnshareNet {
 			reverseBridge, err := NewReverseBridge(m.exposedPorts, m.debug)
 			if err != nil {
 				if m.proxyBridge != nil {
 					m.proxyBridge.Cleanup()
+				}
+				if m.httpProxyBridge != nil {
+					m.httpProxyBridge.Cleanup()
 				}
 				if m.tun2socksPath != "" {
 					_ = os.Remove(m.tun2socksPath)
@@ -208,6 +239,9 @@ func (m *Manager) Initialize() error {
 			if err != nil {
 				if m.proxyBridge != nil {
 					m.proxyBridge.Cleanup()
+				}
+				if m.httpProxyBridge != nil {
+					m.httpProxyBridge.Cleanup()
 				}
 				if m.reverseBridge != nil {
 					m.reverseBridge.Cleanup()
@@ -291,6 +325,7 @@ func (m *Manager) WrapCommand(command string) (string, error) {
 			Watch:             m.watch,
 			RewrittenEnvFiles: m.rewrittenEnvFiles,
 			AllowAudio:        m.config != nil && m.config.AllowAudio,
+			HTTPProxyBridge:   m.httpProxyBridge,
 		})
 	default:
 		return "", fmt.Errorf("unsupported platform: %s", plat)
@@ -310,12 +345,13 @@ func (m *Manager) wrapCommandLearning(command string) (string, error) {
 	m.logDebug("Strace log file: %s", m.straceLogPath)
 
 	return WrapCommandLinuxWithOptions(m.config, command, m.proxyBridge, m.dnsBridge, m.reverseBridge, m.forwardBridge, m.dbusBridge, m.tun2socksPath, LinuxSandboxOptions{
-		UseLandlock:   false, // Disabled: seccomp blocks ptrace which strace needs
-		UseSeccomp:    false, // Disabled: conflicts with strace
-		UseEBPF:       false,
-		Debug:         m.debug,
-		Learning:      true,
-		StraceLogPath: m.straceLogPath,
+		UseLandlock:     false, // Disabled: seccomp blocks ptrace which strace needs
+		UseSeccomp:      false, // Disabled: conflicts with strace
+		UseEBPF:         false,
+		Debug:           m.debug,
+		Learning:        true,
+		StraceLogPath:   m.straceLogPath,
+		HTTPProxyBridge: m.httpProxyBridge,
 	})
 }
 
@@ -356,6 +392,9 @@ func (m *Manager) Cleanup() {
 	}
 	if m.proxyBridge != nil {
 		m.proxyBridge.Cleanup()
+	}
+	if m.httpProxyBridge != nil {
+		m.httpProxyBridge.Cleanup()
 	}
 	if m.tun2socksPath != "" {
 		_ = os.Remove(m.tun2socksPath)

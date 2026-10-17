@@ -9,16 +9,17 @@ title: FAQ
 
 ### Does greywall work inside Docker containers?
 
-Partially. Inside Docker, network namespace isolation (`--unshare-net`) is typically unavailable without `--cap-add=NET_ADMIN`. Greywall detects this and falls back automatically:
+Only with `--cap-add=NET_ADMIN`. Inside Docker, network namespace isolation (`--unshare-net`) is typically unavailable without it.
 
-- Filesystem isolation via bubblewrap still works
-- Command blocking still works
-- Network routing falls back to proxy environment variables (`HTTP_PROXY`, `ALL_PROXY`)
-- Programs that ignore proxy env vars won't be network-isolated in this mode
+Greywall **refuses to run** in that case, exiting with code `78`. The network namespace is what contains network access: proxy environment variables route cooperative programs through the proxy, but any program can ignore them, and without the namespace there is nothing left to stop it. The sandboxed command would be able to reach any destination, including services on `127.0.0.1` and cloud instance metadata endpoints. Greywall is deny-by-default, so it declines rather than offer the appearance of containment.
 
-Run `greywall --linux-features` to see what's available in your environment. For CI environments like GitHub Actions, this fallback is normal and expected.
+```bash
+docker run --cap-add=NET_ADMIN ...
+```
 
-If you need full network isolation in Docker, add `--cap-add=NET_ADMIN` to your container.
+Run `greywall --linux-features` to see what's available in your environment; look for `Network namespace (--unshare-net): true`.
+
+Note this differs from the AppArmor restriction on Ubuntu 24.04+, where the namespace *is* created and only TUN is blocked. Greywall runs normally there — see [Troubleshooting](troubleshooting.md).
 
 ### Does greywall work on Windows?
 

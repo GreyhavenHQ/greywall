@@ -3,6 +3,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -169,6 +170,11 @@ Configuration file format:
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		exitCode = 1
+		// Distinguish "greywall refused to run" from a failure of the
+		// sandboxed command, so callers and CI can tell the two apart.
+		if errors.Is(err, sandbox.ErrNetworkNotIsolated) {
+			exitCode = sandbox.ExitNetworkNotIsolated
+		}
 	}
 	os.Exit(exitCode)
 }
@@ -337,20 +343,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		cfg.Network.DnsAddr = dnsAddr
 	}
 
-	// GreyProxy defaults: when no proxy or DNS is configured (neither via CLI
-	// nor config file), use the standard GreyProxy ports.
-	if cfg.Network.ProxyURL == "" {
-		cfg.Network.ProxyURL = "socks5://localhost:43052"
-		if debug {
-			fmt.Fprintf(os.Stderr, "[greywall] Defaulting proxy to socks5://localhost:43052\n")
-		}
-	}
-	if cfg.Network.HTTPProxyURL == "" {
-		cfg.Network.HTTPProxyURL = "http://localhost:43051"
-		if debug {
-			fmt.Fprintf(os.Stderr, "[greywall] Defaulting HTTP proxy to http://localhost:43051\n")
-		}
-	}
+	applyProxyDefaults(cfg, debug)
 	if cfg.Network.DnsAddr == "" {
 		cfg.Network.DnsAddr = "localhost:43053"
 		if debug {
@@ -916,6 +909,29 @@ func resolveProfile(name string, debug bool) (*config.Config, error) {
 	}
 
 	return nil, fmt.Errorf("profile %q not found (no saved profile and no built-in profile)\nRun: greywall profiles list", name)
+}
+
+// applyProxyDefaults fills in the standard GreyProxy ports when no proxy is
+// configured (neither via CLI nor config file).
+//
+// The HTTP CONNECT proxy defaults only together with the SOCKS5 proxy. A user
+// who sets their own --proxy has no GreyProxy on :43051, so defaulting it would
+// point HTTP_PROXY/HTTPS_PROXY at a port that does not answer, or at whatever
+// else listens there, instead of the proxy they chose.
+func applyProxyDefaults(cfg *config.Config, debug bool) {
+	if cfg.Network.ProxyURL != "" {
+		return
+	}
+	cfg.Network.ProxyURL = "socks5://localhost:43052"
+	if debug {
+		fmt.Fprintf(os.Stderr, "[greywall] Defaulting proxy to socks5://localhost:43052\n")
+	}
+	if cfg.Network.HTTPProxyURL == "" {
+		cfg.Network.HTTPProxyURL = "http://localhost:43051"
+		if debug {
+			fmt.Fprintf(os.Stderr, "[greywall] Defaulting HTTP proxy to http://localhost:43051\n")
+		}
+	}
 }
 
 // proxyIdentity returns the identity used both as the SOCKS5 login injected

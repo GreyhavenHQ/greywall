@@ -110,3 +110,56 @@ func TestProxyIdentity(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyProxyDefaults verifies the HTTP CONNECT proxy defaults to GreyProxy
+// only when the SOCKS5 proxy does, so a custom --proxy is not paired with a
+// GreyProxy port that may not exist.
+func TestApplyProxyDefaults(t *testing.T) {
+	tests := []struct {
+		name      string
+		proxy     string
+		httpProxy string
+		wantProxy string
+		wantHTTP  string
+	}{
+		{
+			name:      "nothing set uses GreyProxy for both",
+			wantProxy: "socks5://localhost:43052",
+			wantHTTP:  "http://localhost:43051",
+		},
+		{
+			name:      "custom proxy leaves HTTP proxy unset",
+			proxy:     "socks5://corp-proxy:1080",
+			wantProxy: "socks5://corp-proxy:1080",
+			wantHTTP:  "",
+		},
+		{
+			name:      "custom proxy and HTTP proxy are kept",
+			proxy:     "socks5://corp-proxy:1080",
+			httpProxy: "http://corp-proxy:3128",
+			wantProxy: "socks5://corp-proxy:1080",
+			wantHTTP:  "http://corp-proxy:3128",
+		},
+		{
+			name:      "HTTP proxy alone is kept and SOCKS defaults",
+			httpProxy: "http://corp-proxy:3128",
+			wantProxy: "socks5://localhost:43052",
+			wantHTTP:  "http://corp-proxy:3128",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Network.ProxyURL = tt.proxy
+			cfg.Network.HTTPProxyURL = tt.httpProxy
+			applyProxyDefaults(cfg, false)
+			if cfg.Network.ProxyURL != tt.wantProxy {
+				t.Errorf("ProxyURL = %q, want %q", cfg.Network.ProxyURL, tt.wantProxy)
+			}
+			if cfg.Network.HTTPProxyURL != tt.wantHTTP {
+				t.Errorf("HTTPProxyURL = %q, want %q", cfg.Network.HTTPProxyURL, tt.wantHTTP)
+			}
+		})
+	}
+}

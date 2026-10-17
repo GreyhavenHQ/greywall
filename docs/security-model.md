@@ -34,7 +34,7 @@ Greywall combines OS-level enforcement with transparent SOCKS5 proxying:
 
 - The OS sandbox / network namespace blocks direct outbound connections.
 - A TUN device inside the sandbox routes all traffic through `tun2socks`, which forwards it to the external SOCKS5 proxy via a Unix socket bridge.
-- If TUN is unavailable, greywall falls back to setting proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`).
+- Greywall also sets proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`). If TUN is unavailable, only applications that honor them reach the network.
 
 Localhost is separate from external traffic:
 

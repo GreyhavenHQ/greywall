@@ -182,7 +182,7 @@ greywall profiles edit opencode
 |----------|-------------|
 | `GREYWALL_SANDBOX` | Set to `1` inside sandboxed processes. Lets commands detect they are running under greywall. |
 | `GREYWALL_TEST_NETWORK` | Set to `1` in smoke tests to enable network-dependent tests. |
-| `HTTP_PROXY` / `HTTPS_PROXY` | Set by greywall to point to the local HTTP proxy (macOS and Linux fallback mode). |
+| `HTTP_PROXY` / `HTTPS_PROXY` | Set by greywall to point to the local HTTP proxy (macOS and Linux). |
 | `ALL_PROXY` | Set by greywall to point to the SOCKS5 proxy. |
 | `GIT_SSH_COMMAND` | Set by greywall on macOS to route SSH through the proxy. |
 

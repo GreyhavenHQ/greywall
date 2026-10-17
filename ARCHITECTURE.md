@@ -192,10 +192,16 @@ flowchart TB
 
 With `--unshare-net`, the sandbox has its own isolated network namespace. Unix sockets provide filesystem-based IPC across namespace boundaries:
 
-1. Host creates Unix sockets, connects via socat to the external SOCKS5 proxy and DNS server
+1. Host creates Unix sockets, connects via socat to the external SOCKS5 proxy, the HTTP CONNECT proxy and the DNS server
 2. Socket files are bind-mounted into the sandbox
-3. Inside the sandbox, a TUN device routes all traffic through `tun2socks`, which forwards to the external proxy via the Unix socket bridge
-4. If TUN is unavailable, greywall falls back to setting proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`)
+3. Inside the sandbox, socat exposes the proxies on `127.0.0.1`: greywall points `ALL_PROXY` at the SOCKS5 bridge and `HTTP_PROXY`/`HTTPS_PROXY` at the HTTP CONNECT bridge, since many clients that read the latter cannot speak SOCKS. The URLs carry the proxy username, which greyproxy uses to identify the session. This is the **primary** path: both protocols send the hostname, so policy is applied against the name the client asked for. With a custom `--proxy` and no HTTP proxy, the variables are set only when TUN is unavailable
+4. Where available, a TUN device plus a default route through `tun2socks` acts as a **backstop**, catching traffic from programs that ignore those variables. It sees packets rather than names, so it must infer the destination — which is why it supplements the proxy variables rather than replacing them
+5. Where TUN is unavailable (for example the AppArmor restriction on Ubuntu 24.04+), proxy-aware programs are unaffected and programs that ignore the variables have no route out
+
+The network namespace is the containment boundary, not an optimisation. Without it,
+proxy variables are the only control and any program may ignore them, so greywall
+refuses to run (exit code `78`). `greywatch` is exempt — it is allow-by-default
+observability and warns instead. See `networkEnforcementError` in `internal/sandbox/linux.go`.
 
 ## Inbound Connections (Reverse Bridge)
 
