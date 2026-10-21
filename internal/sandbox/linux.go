@@ -803,6 +803,36 @@ func getMandatoryDenyPaths(cwd string) []string {
 	return paths
 }
 
+// denyReadMaskArgs returns bwrap args hiding the configured denyRead paths:
+// directories get an empty tmpfs, files /dev/null. Symlinks are skipped: they
+// may point outside the sandbox and cause mount errors.
+func denyReadMaskArgs(cfg *config.Config) []string {
+	var args []string
+	if cfg == nil || cfg.Filesystem.DenyRead == nil {
+		return args
+	}
+	for _, p := range ExpandGlobPatterns(cfg.Filesystem.DenyRead) {
+		if canMountOver(p) {
+			if isDirectory(p) {
+				args = append(args, "--tmpfs", p)
+			} else {
+				args = append(args, "--ro-bind", "/dev/null", p)
+			}
+		}
+	}
+	for _, p := range cfg.Filesystem.DenyRead {
+		normalized := NormalizePath(p)
+		if !ContainsGlobChars(normalized) && canMountOver(normalized) {
+			if isDirectory(normalized) {
+				args = append(args, "--tmpfs", normalized)
+			} else {
+				args = append(args, "--ro-bind", "/dev/null", normalized)
+			}
+		}
+	}
+	return args
+}
+
 // buildDenyByDefaultMounts builds bwrap arguments for deny-by-default filesystem isolation.
 // Starts with --tmpfs / (empty root), then selectively mounts system paths read-only,
 // CWD read-write, and user tooling paths read-only. Sensitive files within CWD are masked.
@@ -1236,36 +1266,6 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 		// Make writable paths actually writable (override read-only root)
 		bwrapArgs = append(bwrapArgs, writableBindArgs(cfg)...)
 
-		// Handle denyRead paths - hide them
-		// For directories: use --tmpfs to replace with empty tmpfs
-		// For files: use --ro-bind /dev/null to mask with empty file
-		// Skip symlinks: they may point outside the sandbox and cause mount errors
-		if cfg != nil && cfg.Filesystem.DenyRead != nil {
-			expandedDenyRead := ExpandGlobPatterns(cfg.Filesystem.DenyRead)
-			for _, p := range expandedDenyRead {
-				if canMountOver(p) {
-					if isDirectory(p) {
-						bwrapArgs = append(bwrapArgs, "--tmpfs", p)
-					} else {
-						// Mask file with /dev/null (appears as empty, unreadable)
-						bwrapArgs = append(bwrapArgs, "--ro-bind", "/dev/null", p)
-					}
-				}
-			}
-
-			// Add non-glob paths
-			for _, p := range cfg.Filesystem.DenyRead {
-				normalized := NormalizePath(p)
-				if !ContainsGlobChars(normalized) && canMountOver(normalized) {
-					if isDirectory(normalized) {
-						bwrapArgs = append(bwrapArgs, "--tmpfs", normalized)
-					} else {
-						bwrapArgs = append(bwrapArgs, "--ro-bind", "/dev/null", normalized)
-					}
-				}
-			}
-		}
-
 		// Apply mandatory deny patterns (make dangerous files/dirs read-only)
 		// This overrides any writable mounts for these paths
 		//
@@ -1318,6 +1318,11 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, proxyBridge
 				}
 			}
 		}
+
+		// denyRead masks go after the mandatory and denyWrite read-only binds: those
+		// bind the real path ("--ro-bind p p"), and bubblewrap's last mount wins, so a
+		// denyWrite of ~/.ssh applied after a denyRead of ~/.ssh/id_* re-exposed the key.
+		bwrapArgs = append(bwrapArgs, denyReadMaskArgs(cfg)...)
 
 	} // end if !opts.Learning && !opts.Watch
 
