@@ -63,7 +63,7 @@ func TestLinux_SessionAllowPaths(t *testing.T) {
 	wantROFile := NormalizePath(roFile)
 
 	// Read layer: every granted path is bound read-only.
-	readArgs := buildDenyByDefaultMounts(cfg, cwd, nil, nil, false)
+	readArgs := buildDenyByDefaultMounts(cfg, cwd, nil, false)
 	for _, ro := range []string{wantRW, wantRODir, wantROFile} {
 		if !hasBindTriple(readArgs, "--ro-bind", ro, ro) {
 			t.Errorf("granted path %q not bound readable (--ro-bind)\nargs: %v", ro, readArgs)
